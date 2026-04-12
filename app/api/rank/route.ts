@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { anthropic, MODEL_FAST as MODEL } from "@/lib/anthropic";
-import { RankedResultsSchema, type RawContact } from "@/lib/schemas";
+import { RankedResultsSchema, UserProfileSchema, type RawContact, type UserProfile } from "@/lib/schemas";
 import { zodTool, extractToolInput } from "@/lib/zodFormat";
 
 const TOOL = zodTool(
@@ -10,7 +10,9 @@ const TOOL = zodTool(
 );
 
 export async function POST(req: NextRequest) {
-  const { contacts, goal }: { contacts: RawContact[]; goal: string } = await req.json();
+  const body = await req.json();
+  const { contacts, goal }: { contacts: RawContact[]; goal: string } = body;
+  const profile: UserProfile = UserProfileSchema.parse(body.userProfile ?? {});
 
   if (!contacts?.length) {
     return NextResponse.json({ error: "contacts array is required" }, { status: 400 });
@@ -21,9 +23,19 @@ export async function POST(req: NextRequest) {
       (c, i) =>
         `${i + 1}. ${c.name} — ${c.title} at ${c.company}` +
         `${c.location ? ` (${c.location})` : ""}` +
-        `${c.company_industry ? ` | ${c.company_industry}` : ""}`
+        `${c.company_industry ? ` | ${c.company_industry}` : ""}` +
+        `${c.headline ? ` | ${c.headline}` : ""}`
     )
     .join("\n");
+
+  const profileLines: string[] = [];
+  if (profile.school) profileLines.push(`School: ${profile.school}${profile.graduation_year ? ` (class of ${profile.graduation_year})` : ""}`);
+  if (profile.major) profileLines.push(`Major: ${profile.major}`);
+  if (profile.fraternity) profileLines.push(`Fraternity/Sorority: ${profile.fraternity}`);
+  if (profile.bio) profileLines.push(`Bio: ${profile.bio}`);
+  const profileContext = profileLines.length
+    ? `\nUser background:\n${profileLines.map(l => `- ${l}`).join("\n")}\n\nBoost ranking for contacts who share the user's school, fraternity, or industry background — mention the shared connection explicitly in talking_points.`
+    : "";
 
   const response = await anthropic.messages.create({
     model: MODEL,
@@ -32,17 +44,17 @@ export async function POST(req: NextRequest) {
 
 Ranking criteria:
 1. Relevance to the stated goal (most important)
-2. Seniority and decision-making power
-3. Mutual benefit potential
+2. Shared background with the user (same school, fraternity, or field — dramatically increases response rate)
+3. Seniority and decision-making power
 4. Quality of talking points you can generate
 
-For each contact provide a relevance_score 1–10, 1–2 sentences on WHY they are worth meeting, and 2–3 concrete talking points referencing their specific company/role.`,
+For each contact provide a relevance_score 1–10, 1–2 sentences on WHY they are worth meeting, and 2–3 concrete talking points. If a shared background exists, make it the first talking point.`,
     tools: [TOOL],
     tool_choice: { type: "tool", name: TOOL.name },
     messages: [
       {
         role: "user",
-        content: `My networking goal: ${goal}\n\nContacts to rank (${contacts.length} total):\n\n${contactList}`,
+        content: `My networking goal: ${goal}${profileContext}\n\nContacts to rank (${contacts.length} total):\n\n${contactList}`,
       },
     ],
   });

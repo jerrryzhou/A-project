@@ -32,24 +32,24 @@ export function GoalForm({ onSubmit }: Props) {
           onChange={(e) => setValue(e.target.value)}
           placeholder="I want to meet founders in the climate tech space in New York over the next 30 days…"
           rows={3}
-          className="w-full rounded-xl border border-gray-700 bg-gray-900 px-4 py-3 text-gray-100 placeholder-gray-500 focus:border-indigo-500 focus:outline-none resize-none"
+          className="w-full rounded-xl border border-slate-700 bg-slate-800/60 px-4 py-3 text-slate-100 placeholder-slate-600 focus:border-indigo-500/60 focus:outline-none resize-none"
         />
         <button
           type="submit"
           disabled={!value.trim() || loading}
-          className="w-full rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-medium py-3 transition-colors"
+          className="w-full rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 disabled:opacity-40 disabled:cursor-not-allowed text-white font-semibold py-3 transition-all shadow-lg shadow-indigo-900/40"
         >
           {loading ? "Parsing your goal…" : "Find Contacts →"}
         </button>
       </form>
 
       <div className="space-y-2">
-        <p className="text-xs text-gray-500 uppercase tracking-wider">Examples</p>
+        <p className="text-xs text-slate-500 uppercase tracking-wider">Examples</p>
         {EXAMPLES.map((ex) => (
           <button
             key={ex}
             onClick={() => setValue(ex)}
-            className="block w-full text-left text-sm text-gray-400 hover:text-gray-200 bg-gray-900 hover:bg-gray-800 rounded-lg px-3 py-2 transition-colors"
+            className="block w-full text-left text-sm text-slate-400 hover:text-slate-200 bg-slate-800/40 hover:bg-slate-800 rounded-lg px-3 py-2 transition-colors border border-slate-700/50"
           >
             {ex}
           </button>

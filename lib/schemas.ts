@@ -1,5 +1,19 @@
 import { z } from "zod";
 
+// ── User profile (from Supabase user_profiles) ────────────────────────────────
+
+export const UserProfileSchema = z.object({
+  name: z.string().optional(),
+  school: z.string().optional(),
+  major: z.string().optional(),
+  graduation_year: z.number().optional(),
+  bio: z.string().optional(),
+  fraternity: z.string().optional(),
+  linkedin_url: z.string().optional(),
+});
+
+export type UserProfile = z.infer<typeof UserProfileSchema>;
+
 // ── Step 1: goal → structured criteria ───────────────────────────────────────
 
 export const SearchCriteriaSchema = z.object({
