@@ -1,28 +1,14 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
-import type { SearchCriteria, RankedContact, OutreachDraft, UserProfile } from "@/lib/schemas";
-import { GoalForm } from "@/components/GoalForm";
-import { CriteriaPreview } from "@/components/CriteriaPreview";
-import { ContactCard } from "@/components/ContactCard";
+import type { RankedContact, OutreachDraft, UserProfile } from "@/lib/schemas";
 import { createClient } from "@/lib/supabase/client";
+import type { AgentDisplayMessage } from "@/app/api/agent/route";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type View = "chat" | "contacts" | "profile";
-
-type ChatStep =
-  | { id: "input" }
-  | { id: "criteria"; criteria: SearchCriteria }
-  | { id: "searching"; criteria: SearchCriteria }
-  | { id: "ranking"; criteria: SearchCriteria; contactCount: number }
-  | { id: "results"; criteria: SearchCriteria; contacts: RankedContact[] };
-
-interface ApprovedEntry {
-  contact: RankedContact;
-  draft: OutreachDraft;
-}
 
 interface SavedContact {
   id: string;
@@ -154,165 +140,288 @@ function Sidebar({ view, setView, userName }: {
 
 // ── Chat View ─────────────────────────────────────────────────────────────────
 
-function ChatView({ userProfile }: { userProfile: FullProfile }) {
-  const [goal, setGoal] = useState("");
-  const [step, setStep] = useState<ChatStep>({ id: "input" });
-  const [approved, setApproved] = useState<ApprovedEntry[]>([]);
-  const [error, setError] = useState<string | null>(null);
+const QUICK_PROMPTS = [
+  "Find VCs in NYC who invest in SaaS",
+  "Connect with ML engineers at AI startups in SF",
+  "Meet fintech founders in my network",
+];
 
-  async function handleGoalSubmit(userGoal: string) {
-    setGoal(userGoal);
-    setError(null);
+function ChatView({ userProfile }: { userProfile: FullProfile }) {
+  const firstName = userProfile.name?.split(" ")[0];
+  const [messages, setMessages] = useState<AgentDisplayMessage[]>([{
+    id: "welcome",
+    role: "assistant",
+    content: firstName
+      ? `Hey ${firstName} — who do you want to connect with?`
+      : "Who do you want to connect with? Describe your ideal contact.",
+  }]);
+  const [apiMessages, setApiMessages] = useState<unknown[]>([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, loading]);
+
+  async function handleSend(text?: string) {
+    const msg = (text ?? input).trim();
+    if (!msg || loading) return;
+    setInput("");
+    setLoading(true);
+
+    setMessages((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), role: "user", content: msg },
+    ]);
+
     try {
-      const res = await fetch("/api/parse-goal", {
+      const res = await fetch("/api/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ goal: userGoal }),
+        body: JSON.stringify({ messages: apiMessages, userMessage: msg, userProfile }),
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
-      setStep({ id: "criteria", criteria: data.criteria });
-    } catch (e) { setError(String(e)); }
-  }
-
-  async function handleCriteriaConfirm(criteria: SearchCriteria) {
-    setError(null);
-    setStep({ id: "searching", criteria });
-    try {
-      const searchRes = await fetch("/api/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ criteria, userProfile }),
-      });
-      const searchData = await searchRes.json();
-      if (!searchRes.ok) throw new Error(searchData.error);
-
-      setStep({ id: "ranking", criteria, contactCount: searchData.total });
-
-      const rankRes = await fetch("/api/rank", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contacts: searchData.contacts, goal, userProfile }),
-      });
-      const rankData = await rankRes.json();
-      if (!rankRes.ok) throw new Error(rankData.error);
-
-      setStep({ id: "results", criteria, contacts: rankData.contacts });
-    } catch (e) {
-      setError(String(e));
-      setStep({ id: "criteria", criteria });
+      setMessages((prev) => [...prev, ...data.displayMessages]);
+      setApiMessages(data.apiMessages);
+    } catch {
+      setMessages((prev) => [
+        ...prev,
+        { id: crypto.randomUUID(), role: "assistant", content: "Something went wrong. Please try again." },
+      ]);
+    } finally {
+      setLoading(false);
     }
-  }
-
-  async function handleApprove(contact: RankedContact, draft: OutreachDraft) {
-    setApproved((prev) => {
-      const filtered = prev.filter((a) => a.contact.name !== contact.name);
-      return [...filtered, { contact, draft }];
-    });
-
-    // Persist to contacts table
-    const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      await supabase.from("contacts").insert({
-        user_id: user.id,
-        name: contact.name,
-        title: contact.title,
-        company: contact.company,
-        location: contact.location ?? null,
-        linkedin_url: contact.linkedin_url ?? null,
-        email: contact.email ?? null,
-        relevance_score: contact.relevance_score,
-        why_relevant: contact.why_relevant,
-        talking_points: contact.talking_points,
-        linkedin_note: draft.linkedin_note,
-        email_subject: draft.email_subject,
-        email_body: draft.email_body,
-        status: "drafted",
-      });
-    }
-  }
-
-  async function handleExport() {
-    const res = await fetch("/api/export", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ rows: approved }),
-    });
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `networking-${Date.now()}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
   }
 
   return (
-    <div className="max-w-3xl mx-auto px-6 py-8">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-slate-100">Find Contacts</h1>
-        <p className="text-slate-400 mt-1 text-sm">
-          Describe who you want to meet — AI finds, ranks, and drafts outreach for you.
-        </p>
+    <div className="flex flex-col h-screen">
+      {/* Header */}
+      <div className="shrink-0 px-6 py-4 border-b border-slate-700/50">
+        <h1 className="text-lg font-semibold text-slate-100">Networking Agent</h1>
+        <p className="text-xs text-slate-500">AI-powered contact search and outreach</p>
       </div>
 
-      {error && (
-        <div className="mb-6 rounded-xl bg-red-900/30 border border-red-700/50 px-4 py-3 text-red-300 text-sm">
-          {error}
-        </div>
-      )}
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto px-6 py-6 space-y-3">
+        {messages.map((msg) => (
+          <ChatMessage key={msg.id} message={msg} />
+        ))}
 
-      {step.id === "input" && <GoalForm onSubmit={handleGoalSubmit} />}
-
-      {step.id === "criteria" && (
-        <CriteriaPreview
-          criteria={step.criteria}
-          goal={goal}
-          onConfirm={handleCriteriaConfirm}
-          onBack={() => setStep({ id: "input" })}
-        />
-      )}
-
-      {step.id === "searching" && <LoadingCard message="Searching for contacts…" />}
-
-      {step.id === "ranking" && (
-        <LoadingCard message={`Found ${step.contactCount} contacts — ranking top 10…`} />
-      )}
-
-      {step.id === "results" && (
-        <div className="space-y-5">
-          <div className="flex items-center justify-between">
-            <h2 className="text-lg font-semibold text-slate-200">
-              Top {step.contacts.length} matches
-            </h2>
-            <div className="flex items-center gap-3">
-              {approved.length > 0 && (
-                <button
-                  onClick={handleExport}
-                  className="bg-emerald-600 hover:bg-emerald-500 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-                >
-                  Export {approved.length} →
-                </button>
-              )}
-              <button
-                onClick={() => setStep({ id: "input" })}
-                className="text-sm text-slate-500 hover:text-slate-300 transition-colors"
-              >
-                New search
-              </button>
-            </div>
+        {loading && (
+          <div className="flex items-center gap-2 text-slate-500 text-sm py-1">
+            <span className="w-1.5 h-1.5 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: "0ms" }} />
+            <span className="w-1.5 h-1.5 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: "120ms" }} />
+            <span className="w-1.5 h-1.5 rounded-full bg-slate-500 animate-bounce" style={{ animationDelay: "240ms" }} />
           </div>
+        )}
+        <div ref={bottomRef} />
+      </div>
 
-          {step.contacts.map((contact) => (
-            <ContactCard
-              key={contact.name}
-              contact={contact}
-              goal={goal}
-              userProfile={userProfile}
-              isApproved={approved.some((a) => a.contact.name === contact.name)}
-              onApprove={handleApprove}
-            />
+      {/* Input */}
+      <div className="shrink-0 border-t border-slate-700/50 px-6 py-4">
+        {/* Quick prompts — only on first message */}
+        {messages.length === 1 && (
+          <div className="flex flex-wrap gap-2 mb-3">
+            {QUICK_PROMPTS.map((p) => (
+              <button
+                key={p}
+                onClick={() => handleSend(p)}
+                className="text-xs text-slate-500 hover:text-slate-300 border border-slate-700/50 hover:border-slate-600 rounded-lg px-3 py-1.5 transition-all"
+              >
+                {p}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="flex gap-3">
+          <input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+            placeholder="Find contacts, get emails, draft messages…"
+            disabled={loading}
+            className="flex-1 rounded-xl border border-slate-700 bg-slate-800/60 px-4 py-3 text-sm
+                       text-slate-100 placeholder-slate-600 focus:border-indigo-500/60 focus:outline-none
+                       disabled:opacity-50 transition-colors"
+          />
+          <button
+            onClick={() => handleSend()}
+            disabled={!input.trim() || loading}
+            className="px-5 py-3 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600
+                       hover:from-indigo-500 hover:to-violet-500 disabled:opacity-40
+                       text-white font-semibold text-sm transition-all"
+          >
+            Send
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Message Renderer ──────────────────────────────────────────────────────────
+
+function ChatMessage({ message }: { message: AgentDisplayMessage }) {
+  const { role, content, data } = message;
+
+  if (role === "status") {
+    if (data?.type === "contacts") return <ContactsResult contacts={data.contacts} />;
+    if (data?.type === "email")    return <EmailResult {...data} />;
+    if (data?.type === "draft")    return <DraftResult draft={data.draft} />;
+    if (content) return (
+      <div className="flex items-center gap-2 text-xs text-slate-500 py-1">
+        <span className="w-3 h-3 border border-indigo-400 border-t-transparent rounded-full animate-spin shrink-0" />
+        {content}
+      </div>
+    );
+    return null;
+  }
+
+  if (role === "user") return (
+    <div className="flex justify-end">
+      <div className="max-w-xs lg:max-w-md bg-gradient-to-r from-indigo-600 to-violet-600 text-white text-sm px-4 py-2.5 rounded-2xl rounded-tr-sm">
+        {content}
+      </div>
+    </div>
+  );
+
+  return (
+    <div className="flex justify-start">
+      <div className="max-w-xs lg:max-w-md bg-slate-800 border border-slate-700/50 text-slate-200 text-sm px-4 py-2.5 rounded-2xl rounded-tl-sm leading-relaxed">
+        {content}
+      </div>
+    </div>
+  );
+}
+
+// ── Contacts Result ───────────────────────────────────────────────────────────
+
+function ContactsResult({ contacts }: { contacts: RankedContact[] }) {
+  return (
+    <div className="space-y-2 max-w-lg">
+      <p className="text-xs text-slate-500 uppercase tracking-wider">{contacts.length} contacts ranked</p>
+      {contacts.map((c) => <ContactRow key={c.name} contact={c} />)}
+    </div>
+  );
+}
+
+function ContactRow({ contact }: { contact: RankedContact }) {
+  const score = contact.relevance_score;
+  const scoreColor = score >= 8 ? "text-emerald-400" : score >= 6 ? "text-amber-400" : "text-slate-400";
+
+  return (
+    <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 px-4 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="text-slate-600 text-xs font-mono shrink-0">#{contact.rank}</span>
+            <p className="font-medium text-slate-200 text-sm truncate">{contact.name}</p>
+          </div>
+          <p className="text-xs text-slate-400 truncate">{contact.title} · {contact.company}</p>
+          {contact.location && <p className="text-xs text-slate-600">{contact.location}</p>}
+        </div>
+        <span className={`text-base font-bold shrink-0 ${scoreColor}`}>
+          {score}<span className="text-slate-600 text-xs">/10</span>
+        </span>
+      </div>
+      <p className="text-xs text-slate-500 mt-2 leading-relaxed">{contact.why_relevant}</p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        {contact.talking_points.map((pt, i) => (
+          <span key={i} className="text-xs text-slate-600">→ {pt}</span>
+        ))}
+      </div>
+      <div className="mt-2">
+        <a
+          href={`https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(`${contact.name} ${contact.company}`)}`}
+          target="_blank" rel="noopener noreferrer"
+          className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+        >
+          Search LinkedIn ↗
+        </a>
+      </div>
+    </div>
+  );
+}
+
+// ── Email Result ──────────────────────────────────────────────────────────────
+
+function EmailResult({ name, company, email, score, source }: { name: string; company: string; email: string | null; score: number; source: "hunter" | "unavailable" }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 px-4 py-3 max-w-sm">
+      <p className="text-xs text-slate-500 mb-1.5">{name} · {company}</p>
+      {email ? (
+        <div className="flex items-center gap-2 flex-wrap">
+          <p className="text-sm text-slate-200 font-mono">{email}</p>
+          <span className="text-xs text-slate-500">{score}% confidence</span>
+          <button
+            onClick={() => { navigator.clipboard.writeText(email); setCopied(true); setTimeout(() => setCopied(false), 1500); }}
+            className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
+          >
+            {copied ? "Copied!" : "Copy"}
+          </button>
+        </div>
+      ) : (
+        <p className="text-sm text-slate-500">Email not found</p>
+      )}
+      <div className="mt-2">
+        {source === "hunter" ? (
+          <span className="inline-flex items-center gap-1 text-xs text-emerald-400 bg-emerald-900/30 border border-emerald-700/40 rounded-full px-2 py-0.5">
+            ✓ Verified via Hunter.io
+          </span>
+        ) : (
+          <span className="inline-flex items-center gap-1 text-xs text-amber-400 bg-amber-900/30 border border-amber-700/40 rounded-full px-2 py-0.5">
+            ⚠ Hunter.io not configured
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Draft Result ──────────────────────────────────────────────────────────────
+
+function DraftResult({ draft }: { draft: OutreachDraft }) {
+  const [expanded, setExpanded] = useState(true);
+  const [copied, setCopied] = useState<string | null>(null);
+
+  function copy(text: string, key: string) {
+    navigator.clipboard.writeText(text);
+    setCopied(key);
+    setTimeout(() => setCopied(null), 1500);
+  }
+
+  return (
+    <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 max-w-lg overflow-hidden">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="w-full px-4 py-3 flex items-center justify-between text-left"
+      >
+        <span className="text-sm font-medium text-slate-200">Outreach for {draft.contact_name}</span>
+        <span className="text-slate-500 text-xs">{expanded ? "▲" : "▼"}</span>
+      </button>
+      {expanded && (
+        <div className="border-t border-slate-700/50 px-4 py-3 space-y-3">
+          {([
+            { label: `LinkedIn (${draft.linkedin_note.length}/300)`, content: draft.linkedin_note, key: "li" },
+            { label: "Subject", content: draft.email_subject, key: "subj" },
+            { label: "Email",   content: draft.email_body,    key: "body" },
+          ] as const).map(({ label, content, key }) => (
+            <div key={key}>
+              <div className="flex justify-between items-center mb-1">
+                <span className="text-xs text-slate-500 uppercase tracking-wider">{label}</span>
+                <button
+                  onClick={() => copy(content, key)}
+                  className="text-xs text-slate-600 hover:text-slate-300 transition-colors"
+                >
+                  {copied === key ? "Copied!" : "Copy"}
+                </button>
+              </div>
+              <p className="text-xs text-slate-300 bg-slate-900/40 rounded-lg px-3 py-2 whitespace-pre-wrap leading-relaxed">
+                {content}
+              </p>
+            </div>
           ))}
         </div>
       )}
@@ -671,17 +780,6 @@ function ProfileView({ profile, onSave }: {
           </button>
         </div>
       )}
-    </div>
-  );
-}
-
-// ── Shared ────────────────────────────────────────────────────────────────────
-
-function LoadingCard({ message }: { message: string }) {
-  return (
-    <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 px-6 py-12 text-center">
-      <div className="inline-block w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin mb-4" />
-      <p className="text-slate-400 text-sm">{message}</p>
     </div>
   );
 }
