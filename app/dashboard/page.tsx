@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { RankedContact, OutreachDraft, UserProfile } from "@/lib/schemas";
 import { createClient } from "@/lib/supabase/client";
 import type { AgentDisplayMessage } from "@/app/api/agent/route";
@@ -33,9 +33,25 @@ type FullProfile = UserProfile & { name?: string };
 
 export default function Dashboard() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [view, setView] = useState<View>("chat");
   const [userProfile, setUserProfile] = useState<FullProfile>({});
   const [profileLoaded, setProfileLoaded] = useState(false);
+  const [gmailToast, setGmailToast] = useState<{ type: "success" | "error"; message: string } | null>(null);
+
+  useEffect(() => {
+    const gmailParam = searchParams.get("gmail");
+    const gmailError = searchParams.get("gmail_error");
+    if (gmailParam === "connected") {
+      setGmailToast({ type: "success", message: "Gmail connected successfully!" });
+      setView("profile");
+      setTimeout(() => setGmailToast(null), 4000);
+    } else if (gmailError) {
+      setGmailToast({ type: "error", message: `Gmail connection failed: ${gmailError}` });
+      setView("profile");
+      setTimeout(() => setGmailToast(null), 5000);
+    }
+  }, [searchParams]);
 
   useEffect(() => {
     const supabase = createClient();
@@ -64,6 +80,16 @@ export default function Dashboard() {
           <ProfileView profile={userProfile} onSave={setUserProfile} />
         )}
       </main>
+
+      {/* Gmail connection toast */}
+      {gmailToast && (
+        <div className={`fixed bottom-6 right-6 z-50 rounded-xl border px-4 py-3 text-sm shadow-lg backdrop-blur
+          ${gmailToast.type === "success"
+            ? "bg-emerald-900/80 border-emerald-700/60 text-emerald-200"
+            : "bg-red-900/80 border-red-700/60 text-red-200"}`}>
+          {gmailToast.message}
+        </div>
+      )}
     </div>
   );
 }
@@ -158,6 +184,7 @@ function ChatView({ userProfile }: { userProfile: FullProfile }) {
   const [apiMessages, setApiMessages] = useState<unknown[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [emailMap, setEmailMap] = useState<Record<string, string>>({}); // name → email
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -184,6 +211,17 @@ function ChatView({ userProfile }: { userProfile: FullProfile }) {
       const data = await res.json();
       setMessages((prev) => [...prev, ...data.displayMessages]);
       setApiMessages(data.apiMessages);
+
+      // Extract any newly found emails and add to emailMap
+      const newEmails: Record<string, string> = {};
+      for (const m of data.displayMessages as AgentDisplayMessage[]) {
+        if (m.data?.type === "email" && m.data.email) {
+          newEmails[m.data.name] = m.data.email;
+        }
+      }
+      if (Object.keys(newEmails).length > 0) {
+        setEmailMap((prev) => ({ ...prev, ...newEmails }));
+      }
     } catch {
       setMessages((prev) => [
         ...prev,
@@ -205,7 +243,7 @@ function ChatView({ userProfile }: { userProfile: FullProfile }) {
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-6 py-6 space-y-3">
         {messages.map((msg) => (
-          <ChatMessage key={msg.id} message={msg} />
+          <ChatMessage key={msg.id} message={msg} emailMap={emailMap} userProfile={userProfile} />
         ))}
 
         {loading && (
@@ -262,11 +300,15 @@ function ChatView({ userProfile }: { userProfile: FullProfile }) {
 
 // ── Message Renderer ──────────────────────────────────────────────────────────
 
-function ChatMessage({ message }: { message: AgentDisplayMessage }) {
+function ChatMessage({ message, emailMap, userProfile }: {
+  message: AgentDisplayMessage;
+  emailMap: Record<string, string>;
+  userProfile: FullProfile;
+}) {
   const { role, content, data } = message;
 
   if (role === "status") {
-    if (data?.type === "contacts") return <ContactsResult contacts={data.contacts} />;
+    if (data?.type === "contacts") return <ContactsResult contacts={data.contacts} emailMap={emailMap} userProfile={userProfile} />;
     if (data?.type === "email")    return <EmailResult {...data} />;
     if (data?.type === "draft")    return <DraftResult draft={data.draft} />;
     if (content) return (
@@ -297,18 +339,76 @@ function ChatMessage({ message }: { message: AgentDisplayMessage }) {
 
 // ── Contacts Result ───────────────────────────────────────────────────────────
 
-function ContactsResult({ contacts }: { contacts: RankedContact[] }) {
+function ContactsResult({ contacts, emailMap, userProfile }: {
+  contacts: RankedContact[];
+  emailMap: Record<string, string>;
+  userProfile: FullProfile;
+}) {
   return (
     <div className="space-y-2 max-w-lg">
       <p className="text-xs text-slate-500 uppercase tracking-wider">{contacts.length} contacts ranked</p>
-      {contacts.map((c) => <ContactRow key={c.name} contact={c} />)}
+      {contacts.map((c) => (
+        <ContactRow
+          key={c.name}
+          contact={c}
+          email={emailMap[c.name] ?? null}
+          userProfile={userProfile}
+        />
+      ))}
     </div>
   );
 }
 
-function ContactRow({ contact }: { contact: RankedContact }) {
+type RowDraftState =
+  | { status: "idle" }
+  | { status: "drafting" }
+  | { status: "ready"; subject: string; body: string }
+  | { status: "sending" }
+  | { status: "sent"; from: string }
+  | { status: "error"; message: string };
+
+function ContactRow({ contact, email, userProfile }: {
+  contact: RankedContact;
+  email: string | null;
+  userProfile: FullProfile;
+}) {
   const score = contact.relevance_score;
   const scoreColor = score >= 8 ? "text-emerald-400" : score >= 6 ? "text-amber-400" : "text-slate-400";
+  const [draftState, setDraftState] = useState<RowDraftState>({ status: "idle" });
+
+  async function handleDraftAndSend() {
+    if (!email) return;
+    setDraftState({ status: "drafting" });
+    try {
+      const res = await fetch("/api/outreach", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ contact, goal: contact.why_relevant, userProfile }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const draft = await res.json() as { email_subject: string; email_body: string };
+      setDraftState({ status: "ready", subject: draft.email_subject, body: draft.email_body });
+    } catch (e) {
+      setDraftState({ status: "error", message: String(e) });
+    }
+  }
+
+  async function handleSend(subject: string, body: string) {
+    if (!email) return;
+    setDraftState({ status: "sending" });
+    try {
+      const res = await fetch("/api/send-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ to: email, name: contact.name, subject, body }),
+      });
+      const data = await res.json() as { success?: boolean; from?: string; error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Failed to send");
+      setDraftState({ status: "sent", from: data.from ?? "" });
+    } catch (e) {
+      setDraftState({ status: "error", message: String(e) });
+    }
+  }
 
   return (
     <div className="rounded-xl border border-slate-700/50 bg-slate-800/40 px-4 py-3">
@@ -331,7 +431,7 @@ function ContactRow({ contact }: { contact: RankedContact }) {
           <span key={i} className="text-xs text-slate-600">→ {pt}</span>
         ))}
       </div>
-      <div className="mt-2">
+      <div className="mt-3 flex items-center gap-3 flex-wrap">
         <a
           href={`https://www.linkedin.com/search/results/people/?keywords=${encodeURIComponent(`${contact.name} ${contact.company}`)}`}
           target="_blank" rel="noopener noreferrer"
@@ -339,7 +439,61 @@ function ContactRow({ contact }: { contact: RankedContact }) {
         >
           Search LinkedIn ↗
         </a>
+        {email && draftState.status === "idle" && (
+          <button
+            onClick={handleDraftAndSend}
+            className="text-xs text-indigo-300 hover:text-indigo-200 border border-indigo-700/50 hover:border-indigo-500/60 rounded-lg px-3 py-1 transition-all"
+          >
+            Draft & send via Gmail →
+          </button>
+        )}
+        {draftState.status === "drafting" && (
+          <span className="text-xs text-slate-500 flex items-center gap-1.5">
+            <span className="w-3 h-3 border border-indigo-400 border-t-transparent rounded-full animate-spin" />
+            Drafting…
+          </span>
+        )}
+        {draftState.status === "sending" && (
+          <span className="text-xs text-slate-500 flex items-center gap-1.5">
+            <span className="w-3 h-3 border border-indigo-400 border-t-transparent rounded-full animate-spin" />
+            Sending…
+          </span>
+        )}
+        {draftState.status === "sent" && (
+          <span className="text-xs text-emerald-400">✓ Sent from {draftState.from}</span>
+        )}
+        {draftState.status === "error" && (
+          <span className="text-xs text-red-400">{draftState.message}</span>
+        )}
       </div>
+
+      {/* Draft preview before sending */}
+      {draftState.status === "ready" && (
+        <div className="mt-3 space-y-2 border-t border-slate-700/40 pt-3">
+          <div className="bg-slate-900/50 rounded-lg px-3 py-2">
+            <p className="text-xs text-slate-500 mb-0.5">Subject</p>
+            <p className="text-xs text-slate-300">{draftState.subject}</p>
+          </div>
+          <div className="bg-slate-900/50 rounded-lg px-3 py-2">
+            <p className="text-xs text-slate-500 mb-0.5">Body</p>
+            <p className="text-xs text-slate-300 whitespace-pre-wrap">{draftState.body}</p>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleSend(draftState.subject, draftState.body)}
+              className="flex-1 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium py-2 transition-colors"
+            >
+              Send to {email} →
+            </button>
+            <button
+              onClick={() => setDraftState({ status: "idle" })}
+              className="rounded-lg border border-slate-700 text-slate-500 hover:text-slate-300 text-xs px-3 py-2 transition-colors"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -780,7 +934,102 @@ function ProfileView({ profile, onSave }: {
           </button>
         </div>
       )}
+
+      {/* Gmail integration */}
+      <div className="mt-10 border-t border-slate-700/50 pt-8">
+        <h2 className="text-base font-semibold text-slate-200 mb-1">Email integration</h2>
+        <p className="text-sm text-slate-500 mb-5">
+          Connect Gmail to send outreach emails directly from your account.
+        </p>
+        <GmailSection />
+      </div>
     </div>
+  );
+}
+
+// ── Gmail Section ─────────────────────────────────────────────────────────────
+
+function GmailSection() {
+  const [status, setStatus] = useState<"loading" | "connected" | "disconnected">("loading");
+  const [gmailEmail, setGmailEmail] = useState<string | null>(null);
+  const [disconnecting, setDisconnecting] = useState(false);
+
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getUser().then(async ({ data }) => {
+      if (!data.user) { setStatus("disconnected"); return; }
+      const { data: tokenRow } = await supabase
+        .from("user_google_tokens")
+        .select("gmail_email")
+        .eq("user_id", data.user.id)
+        .single();
+      if (tokenRow?.gmail_email) {
+        setGmailEmail(tokenRow.gmail_email);
+        setStatus("connected");
+      } else {
+        setStatus("disconnected");
+      }
+    });
+  }, []);
+
+  async function handleDisconnect() {
+    setDisconnecting(true);
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (user) {
+      await supabase.from("user_google_tokens").delete().eq("user_id", user.id);
+    }
+    setStatus("disconnected");
+    setGmailEmail(null);
+    setDisconnecting(false);
+  }
+
+  if (status === "loading") {
+    return (
+      <div className="flex items-center gap-2 text-slate-500 text-sm">
+        <span className="w-3.5 h-3.5 border-2 border-slate-600 border-t-transparent rounded-full animate-spin" />
+        Checking connection…
+      </div>
+    );
+  }
+
+  if (status === "connected" && gmailEmail) {
+    return (
+      <div className="flex items-center justify-between rounded-xl border border-emerald-700/40 bg-emerald-900/20 px-4 py-3">
+        <div className="flex items-center gap-3">
+          <span className="text-emerald-400 text-base">✓</span>
+          <div>
+            <p className="text-sm font-medium text-emerald-300">Gmail connected</p>
+            <p className="text-xs text-slate-400">{gmailEmail}</p>
+          </div>
+        </div>
+        <button
+          onClick={handleDisconnect}
+          disabled={disconnecting}
+          className="text-xs text-slate-500 hover:text-red-400 transition-colors"
+        >
+          {disconnecting ? "Removing…" : "Disconnect"}
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <a
+      href="/api/auth/google"
+      className="inline-flex items-center gap-2.5 rounded-xl border border-slate-600 bg-slate-800/60
+                 hover:border-indigo-500/60 hover:bg-indigo-950/40 px-5 py-3 text-sm text-slate-300
+                 hover:text-indigo-300 transition-all"
+    >
+      {/* Google G icon */}
+      <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+        <path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"/>
+        <path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"/>
+        <path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" fill="#FBBC05"/>
+        <path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"/>
+      </svg>
+      Connect Gmail
+    </a>
   );
 }
 

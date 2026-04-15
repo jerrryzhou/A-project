@@ -135,6 +135,12 @@ export function ContactCard({ contact, goal, userProfile, isApproved, onApprove 
   );
 }
 
+type SendState =
+  | { status: "idle" }
+  | { status: "sending" }
+  | { status: "sent"; from: string }
+  | { status: "error"; message: string };
+
 function OutreachPanel({
   state,
   contact,
@@ -146,6 +152,30 @@ function OutreachPanel({
   isApproved: boolean;
   onApprove: (draft: OutreachDraft) => void;
 }) {
+  const [sendState, setSendState] = useState<SendState>({ status: "idle" });
+
+  async function handleSend(draft: OutreachDraft) {
+    if (!contact.email) return;
+    setSendState({ status: "sending" });
+    try {
+      const res = await fetch("/api/send-email", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          to:      contact.email,
+          name:    contact.name,
+          subject: draft.email_subject,
+          body:    draft.email_body,
+        }),
+      });
+      const data = await res.json() as { success?: boolean; from?: string; error?: string };
+      if (!res.ok) throw new Error(data.error ?? "Failed to send");
+      setSendState({ status: "sent", from: data.from ?? "" });
+    } catch (e) {
+      setSendState({ status: "error", message: String(e) });
+    }
+  }
+
   if (state.status === "loading") {
     return (
       <div className="border-t border-slate-700/50 px-5 py-6 flex items-center gap-3 text-slate-500 text-sm">
@@ -174,15 +204,46 @@ function OutreachPanel({
       <DraftSection label="Email subject" content={draft.email_subject} />
       <DraftSection label="Email body" content={draft.email_body} />
 
-      {!isApproved ? (
-        <button
-          onClick={() => onApprove(draft)}
-          className="w-full rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-medium py-2.5 transition-colors"
-        >
-          ✓ Approve & add to export
-        </button>
-      ) : (
-        <p className="text-center text-sm text-emerald-400">✓ Added to export</p>
+      <div className="flex gap-2">
+        {!isApproved ? (
+          <button
+            onClick={() => onApprove(draft)}
+            className="flex-1 rounded-lg bg-emerald-700 hover:bg-emerald-600 text-white text-sm font-medium py-2.5 transition-colors"
+          >
+            ✓ Approve & add to export
+          </button>
+        ) : (
+          <p className="flex-1 text-center text-sm text-emerald-400 py-2.5">✓ Added to export</p>
+        )}
+
+        {/* Send via Gmail — only shown if contact has a verified email */}
+        {contact.email && (
+          <button
+            onClick={() => handleSend(draft)}
+            disabled={sendState.status === "sending" || sendState.status === "sent"}
+            className={`flex-1 rounded-lg text-sm font-medium py-2.5 transition-colors border
+              ${sendState.status === "sent"
+                ? "border-emerald-700/40 bg-emerald-900/20 text-emerald-400 cursor-default"
+                : sendState.status === "error"
+                  ? "border-red-700/40 bg-red-900/20 text-red-400"
+                  : "border-indigo-700/50 bg-indigo-900/30 hover:bg-indigo-900/50 text-indigo-300"
+              }`}
+          >
+            {sendState.status === "sending" && (
+              <span className="inline-flex items-center gap-2 justify-center w-full">
+                <span className="w-3.5 h-3.5 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
+                Sending…
+              </span>
+            )}
+            {sendState.status === "sent"  && `✓ Sent from ${sendState.from}`}
+            {sendState.status === "error" && "Retry send ↗"}
+            {sendState.status === "idle"  && "Send via Gmail →"}
+          </button>
+        )}
+      </div>
+
+      {sendState.status === "error" && (
+        <p className="text-xs text-red-400">{sendState.message}</p>
       )}
     </div>
   );
