@@ -21,7 +21,6 @@ interface SavedContact {
   relevance_score?: number;
   status: string;
   notes?: string;
-  linkedin_note?: string;
   email_subject?: string;
   email_body?: string;
   created_at: string;
@@ -182,6 +181,7 @@ function ChatView({ userProfile }: { userProfile: FullProfile }) {
       : "Who do you want to connect with? Describe your ideal contact.",
   }]);
   const [apiMessages, setApiMessages] = useState<unknown[]>([]);
+  const [pendingPlan, setPendingPlan] = useState<unknown>(null);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [emailMap, setEmailMap] = useState<Record<string, string>>({}); // name → email
@@ -206,11 +206,12 @@ function ChatView({ userProfile }: { userProfile: FullProfile }) {
       const res = await fetch("/api/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: apiMessages, userMessage: msg, userProfile }),
+        body: JSON.stringify({ messages: apiMessages, userMessage: msg, userProfile, pendingPlan }),
       });
       const data = await res.json();
       setMessages((prev) => [...prev, ...data.displayMessages]);
       setApiMessages(data.apiMessages);
+      setPendingPlan(data.pendingPlan ?? null);
 
       // Extract any newly found emails and add to emailMap
       const newEmails: Record<string, string> = {};
@@ -558,7 +559,6 @@ function DraftResult({ draft }: { draft: OutreachDraft }) {
       {expanded && (
         <div className="border-t border-slate-700/50 px-4 py-3 space-y-3">
           {([
-            { label: `LinkedIn (${draft.linkedin_note.length}/300)`, content: draft.linkedin_note, key: "li" },
             { label: "Subject", content: draft.email_subject, key: "subj" },
             { label: "Email",   content: draft.email_body,    key: "body" },
           ] as const).map(({ label, content, key }) => (
@@ -728,16 +728,8 @@ function SavedContactRow({ contact, onStatusChange }: {
         </div>
       </div>
 
-      {expanded && (contact.linkedin_note || contact.email_subject || contact.email_body) && (
+      {expanded && (contact.email_subject || contact.email_body) && (
         <div className="border-t border-slate-700/50 px-5 py-4 space-y-3 bg-slate-900/30">
-          {contact.linkedin_note && (
-            <DraftField
-              label={`LinkedIn note (${contact.linkedin_note.length}/300)`}
-              content={contact.linkedin_note}
-              copied={copied === "li"}
-              onCopy={() => copy(contact.linkedin_note!, "li")}
-            />
-          )}
           {contact.email_subject && (
             <DraftField
               label="Email subject"

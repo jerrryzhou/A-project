@@ -81,9 +81,6 @@ export type RankedResults = z.infer<typeof RankedResultsSchema>;
 
 export const OutreachDraftSchema = z.object({
   contact_name: z.string(),
-  linkedin_note: z.string().max(300).describe(
-    "LinkedIn connection request note — ≤300 chars, warm and specific to this person"
-  ),
   email_subject: z.string(),
   email_body: z.string().describe(
     "~100-word email, plain and direct, no fluff, clear ask"

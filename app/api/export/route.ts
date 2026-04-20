@@ -30,7 +30,6 @@ export async function POST(req: NextRequest) {
     "Relevance Score",
     "Why Relevant",
     "Talking Points",
-    "LinkedIn Note",
     "Email Subject",
     "Email Body",
   ];
@@ -47,7 +46,6 @@ export async function POST(req: NextRequest) {
       contact.relevance_score,
       escapeCsv(contact.why_relevant),
       escapeCsv(contact.talking_points.join(" | ")),
-      escapeCsv(draft.linkedin_note),
       escapeCsv(draft.email_subject),
       escapeCsv(draft.email_body),
     ].join(",")

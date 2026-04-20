@@ -197,10 +197,6 @@ function OutreachPanel({
 
   return (
     <div className="border-t border-slate-700/50 px-5 py-4 space-y-4">
-      <DraftSection
-        label={`LinkedIn note (${draft.linkedin_note.length}/300 chars)`}
-        content={draft.linkedin_note}
-      />
       <DraftSection label="Email subject" content={draft.email_subject} />
       <DraftSection label="Email body" content={draft.email_body} />
 

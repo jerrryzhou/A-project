@@ -23,7 +23,7 @@ export const AGENT_TOOLS: Anthropic.Tool[] = [
       properties: {
         goal:       { type: "string", description: "Plain-English networking goal" },
         roles:      { type: "array", items: { type: "string" }, description: "Target job titles" },
-        industries: { type: "array", items: { type: "string" }, description: "Target industries" },
+        industries: { type: "array", items: { type: "stringf" }, description: "Target industries" },
         locations:  { type: "array", items: { type: "string" }, description: "Cities or regions" },
         keywords:   { type: "array", items: { type: "string" }, description: "Extra keywords" },
       },
@@ -96,6 +96,8 @@ export type ToolResultData =
 export type ToolExecResult = {
   result: unknown;
   data?: ToolResultData;
+  usage?: { input_tokens: number; output_tokens: number };
+  thought?: string;
 };
 
 // ── Dispatcher ────────────────────────────────────────────────────────────────
@@ -168,7 +170,7 @@ Locations: ${locations.join(", ")}${keywords.length ? `\nKeywords: ${keywords.jo
   else contacts = Object.values(raw).find(Array.isArray) ?? [];
 
   const parsed = RawContactListSchema.parse({ contacts });
-  return { result: parsed };
+  return { result: parsed, usage: response.usage };
 }
 
 // ── Rank ──────────────────────────────────────────────────────────────────────
@@ -210,6 +212,7 @@ async function executeRank(
   return {
     result: results,
     data: { type: "contacts", contacts: results.contacts },
+    usage: response.usage,
   };
 }
 
@@ -269,10 +272,15 @@ async function executeDraftOutreach(
   const response = await anthropic.messages.create({
     model: MODEL,
     max_tokens: 1024,
-    system: `You are a networking copywriter.
-LinkedIn note (≤300 chars): specific, no clichés ("hope this finds you well"), clear ask.
-Email: ~100 words, plain English, clear ask, end with a specific action.
-If sender and contact share a school or fraternity, open with it naturally.${senderCtx ? ` Sender: ${senderCtx}.` : ""}`,
+    system: `You are a professional outreach email writer. Write concise, human-sounding messages tailored to the recipient.
+
+Rules:
+- Professional but natural: polished without being stiff.
+- Genuinely personal: reference their role, company, or shared background — nothing generic.
+- No clichés: never use "hope this finds you well", "I came across your profile", or AI-sounding filler.
+- Clear and concise: every sentence has a purpose; email ≈100 words.
+- End with one specific action (e.g. "Would you have 20 min next week?").
+- If sender and contact share a school or fraternity, open with it naturally.${senderCtx ? `\n\nSender context: ${senderCtx}.` : ""}`,
     tools: [DRAFT_TOOL],
     tool_choice: { type: "tool", name: DRAFT_TOOL.name },
     messages: [{
@@ -289,5 +297,5 @@ Why relevant: ${input.why_relevant}${input.talking_points ? `\nTalking points: $
   if (!block) throw new Error("Draft tool not called");
 
   const draft = OutreachDraftSchema.parse(block.input);
-  return { result: draft, data: { type: "draft", draft } };
+  return { result: draft, data: { type: "draft", draft }, usage: response.usage };
 }
