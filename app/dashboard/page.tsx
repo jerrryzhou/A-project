@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { RankedContact, OutreachDraft, UserProfile } from "@/lib/schemas";
 import { createClient } from "@/lib/supabase/client";
-import type { AgentDisplayMessage } from "@/app/api/agent/route";
+import type { AgentDisplayMessage, AgentTrace } from "@/app/api/agent/route";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -185,6 +185,8 @@ function ChatView({ userProfile }: { userProfile: FullProfile }) {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [emailMap, setEmailMap] = useState<Record<string, string>>({}); // name → email
+  const [lastTrace, setLastTrace] = useState<AgentTrace | null>(null);
+  const [showDebug, setShowDebug] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -212,6 +214,7 @@ function ChatView({ userProfile }: { userProfile: FullProfile }) {
       setMessages((prev) => [...prev, ...data.displayMessages]);
       setApiMessages(data.apiMessages);
       setPendingPlan(data.pendingPlan ?? null);
+      if (data.trace) setLastTrace(data.trace);
 
       // Extract any newly found emails and add to emailMap
       const newEmails: Record<string, string> = {};
@@ -236,9 +239,23 @@ function ChatView({ userProfile }: { userProfile: FullProfile }) {
   return (
     <div className="flex flex-col h-screen">
       {/* Header */}
-      <div className="shrink-0 px-6 py-4 border-b border-slate-700/50">
-        <h1 className="text-lg font-semibold text-slate-100">Networking Agent</h1>
-        <p className="text-xs text-slate-500">AI-powered contact search and outreach</p>
+      <div className="shrink-0 px-6 py-4 border-b border-slate-700/50 flex items-center justify-between">
+        <div>
+          <h1 className="text-lg font-semibold text-slate-100">Networking Agent</h1>
+          <p className="text-xs text-slate-500">AI-powered contact search and outreach</p>
+        </div>
+        {lastTrace && (
+          <button
+            onClick={() => setShowDebug((v) => !v)}
+            className={`text-xs px-3 py-1.5 rounded-lg border transition-colors font-mono ${
+              showDebug
+                ? "border-violet-500/60 bg-violet-900/30 text-violet-300"
+                : "border-slate-700 text-slate-500 hover:text-slate-300 hover:border-slate-600"
+            }`}
+          >
+            {showDebug ? "hide debug" : "debug"}
+          </button>
+        )}
       </div>
 
       {/* Messages */}
@@ -294,6 +311,78 @@ function ChatView({ userProfile }: { userProfile: FullProfile }) {
             Send
           </button>
         </div>
+      </div>
+
+      {/* Debug panel */}
+      {showDebug && lastTrace && <DebugPanel trace={lastTrace} />}
+    </div>
+  );
+}
+
+// ── Debug Panel ───────────────────────────────────────────────────────────────
+
+function DebugPanel({ trace }: { trace: AgentTrace }) {
+  const [expandedStep, setExpandedStep] = useState<string | null>(null);
+
+  return (
+    <div className="shrink-0 border-t border-violet-800/40 bg-slate-950/80 font-mono text-xs max-h-72 overflow-y-auto">
+      {/* Summary bar */}
+      <div className="flex items-center gap-4 px-4 py-2 border-b border-violet-800/30 text-violet-400">
+        <span>run: {trace.runId.slice(0, 8)}</span>
+        <span>steps: {trace.steps.length}</span>
+        <span>tokens: {trace.totalTokens.total.toLocaleString()} ({trace.totalTokens.input}↑ {trace.totalTokens.output}↓)</span>
+        <span>latency: {trace.totalLatencyMs}ms</span>
+      </div>
+
+      {/* Steps */}
+      <div className="divide-y divide-slate-800/60">
+        {trace.steps.map((step) => (
+          <div key={step.id}>
+            <button
+              onClick={() => setExpandedStep(expandedStep === step.id ? null : step.id)}
+              className="w-full flex items-center gap-3 px-4 py-2 hover:bg-slate-800/40 transition-colors text-left"
+            >
+              <span className="text-slate-600 w-16 shrink-0">{step.latencyMs}ms</span>
+              <span className="text-violet-400 w-24 shrink-0">{step.agent}</span>
+              <span className="text-slate-400 w-32 shrink-0">{step.model.split("-").slice(-2).join("-")}</span>
+              <span className="text-slate-500 truncate">{step.thought ?? step.tool ?? "—"}</span>
+              <span className="text-slate-600 ml-auto shrink-0">{step.tokens.total}tok</span>
+              <span className="text-slate-700 ml-2">{expandedStep === step.id ? "▲" : "▼"}</span>
+            </button>
+
+            {expandedStep === step.id && (
+              <div className="px-4 pb-3 space-y-2 bg-slate-900/60">
+                {step.tool && (
+                  <div>
+                    <p className="text-slate-600 mb-0.5">tool</p>
+                    <p className="text-amber-400">{step.tool}</p>
+                  </div>
+                )}
+                {step.toolInput && (
+                  <div>
+                    <p className="text-slate-600 mb-0.5">input</p>
+                    <pre className="text-slate-400 whitespace-pre-wrap break-all">
+                      {JSON.stringify(step.toolInput, null, 2)}
+                    </pre>
+                  </div>
+                )}
+                {step.result && (
+                  <div>
+                    <p className="text-slate-600 mb-0.5">result</p>
+                    <pre className="text-slate-400 whitespace-pre-wrap break-all">
+                      {JSON.stringify(step.result, null, 2)}
+                    </pre>
+                  </div>
+                )}
+                <div className="flex gap-4 text-slate-600 pt-1">
+                  <span>↑ {step.tokens.input} input</span>
+                  <span>↓ {step.tokens.output} output</span>
+                  <span>{step.latencyMs}ms</span>
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
       </div>
     </div>
   );
