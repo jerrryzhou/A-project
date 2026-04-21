@@ -37,12 +37,14 @@ const OrchestratorPlanSchema = z.object({
   contact_search_params: ContactSearchParamsSchema.optional().describe(
     "Required for find_contacts and find_and_email intents"
   ),
-  email_gen_params: EmailGenParamsSchema.optional().describe(
-    "Required for generate_email intent when contact details are in the message"
-  ),
-  email_send_params: EmailSendParamsSchema.optional().describe(
-    "Required for send_email intent — only set if all fields are clearly present"
-  ),
+  email_gen_params: z.preprocess(
+    (v) => (typeof v === "string" ? undefined : v),
+    EmailGenParamsSchema.optional()
+  ).describe("Required for generate_email intent when contact details are in the message"),
+  email_send_params: z.preprocess(
+    (v) => (typeof v === "string" ? undefined : v),
+    EmailSendParamsSchema.optional()
+  ).describe("Required for send_email intent — only set if all fields are clearly present"),
   general_reply: z.string().optional().describe(
     "Short reply for general intent — no sub-agent needed"
   ),
@@ -65,10 +67,10 @@ const SYSTEM = `You are an intent classifier for a professional networking assis
 
 Intents:
 - find_contacts: user wants to find/search for people to network with
-- generate_email: user wants to draft an outreach email or LinkedIn message for a specific person
+- generate_email: user wants to draft OR revise outreach emails. Use this for any request to write, rewrite, improve, or change the tone of emails — even if they say "make it less corny", "redo this", "more professional", "shorter", etc.
 - send_email: user explicitly wants to send an already-drafted email
 - find_and_email: user wants to find contacts AND draft emails in one go
-- general: conversational messages, questions, or anything else
+- general: conversational messages, questions, or anything else. Do NOT use this if the user is asking to change or improve emails.
 
 Extract parameters precisely from the message and conversation history.
 Only populate email_send_params if the recipient email address, subject, and body are all clearly available.`;

@@ -23,8 +23,9 @@ export type { AgentTrace };
 
 export type PendingPlan = {
   plan: OrchestratorPlan;
-  nextStep: "contact_finder" | "email_generator" | "email_sender";
+  nextStep: "contact_finder" | "email_generator" | "email_sender" | "done";
   foundContacts?: RankedContact[];
+  feedback?: string;
 };
 
 const MAX_ATTEMPTS = 3;
@@ -64,6 +65,7 @@ const STEP_TOOLS: Record<PendingPlan["nextStep"], string[]> = {
   contact_finder:  ["search_contacts", "rank_contacts"],
   email_generator: ["draft_outreach"],
   email_sender:    ["gmail.send"],
+  done:            [],
 };
 
 function planSummary(intent: OrchestratorPlan["intent"]): string {
@@ -147,7 +149,7 @@ async function executeStep(
   apiMessages: Anthropic.MessageParam[],
   tracer: Tracer
 ): Promise<PendingPlan | null> {
-  const { plan, nextStep, foundContacts = [] } = incoming;
+  const { plan, nextStep, foundContacts = [], feedback: planFeedback } = incoming;
 
   // ── Contact Finder ──────────────────────────────────────────────────────────
   if (nextStep === "contact_finder" && plan.contact_search_params) {
@@ -179,10 +181,13 @@ async function executeStep(
       if (plan.intent === "find_and_email") {
         displayMessages.push({
           id: uuid(), role: "assistant",
-          content: `Found ${contactResult.contacts.length} contacts. Shall I draft emails for the top 3?`,
+          content: `Found ${contactResult.contacts.length} contacts. Shall I draft emails for all of them?`,
         });
         return { plan, nextStep: "email_generator", foundContacts: contactResult.contacts };
       }
+
+      // For find_contacts: store contacts so follow-up "email these" requests work
+      return { plan, nextStep: "done" as PendingPlan["nextStep"], foundContacts: contactResult.contacts };
     } else {
       displayMessages.push({
         id: uuid(), role: "assistant",
@@ -197,14 +202,14 @@ async function executeStep(
   if (nextStep === "email_generator") {
     const goal = plan.contact_search_params?.goal ?? plan.email_gen_params?.goal ?? "";
     const targets = plan.intent === "find_and_email"
-      ? foundContacts.slice(0, 3)
+      ? foundContacts
       : plan.email_gen_params ? [buildContactFromParams(plan.email_gen_params)] : [];
 
     for (const contact of targets) {
       displayMessages.push({ id: uuid(), role: "status", content: `Drafting email for ${contact.name}…` });
 
       let emailResult = null;
-      let feedback: string | undefined;
+      let feedback: string | undefined = planFeedback;
 
       for (let i = 0; i < MAX_ATTEMPTS; i++) {
         emailResult = await runEmailGenerator(contact, goal, userProfile, feedback, tracer);
@@ -259,7 +264,7 @@ async function executeStep(
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { messages, userMessage, userProfile: rawProfile, pendingPlan: incoming } = body;
+  const { messages, userMessage, userProfile: rawProfile, pendingPlan: incoming, lastContacts = [] } = body;
 
   const userProfile = UserProfileSchema.parse(rawProfile ?? {});
   const tracer = new Tracer();
@@ -272,7 +277,8 @@ export async function POST(req: NextRequest) {
   // ── Confirmed: execute the pending step ─────────────────────────────────────
   if (incoming && isConfirmation(userMessage)) {
     const next = await executeStep(incoming as PendingPlan, userProfile, displayMessages, apiMessages, tracer);
-    return NextResponse.json({ displayMessages, apiMessages, pendingPlan: next, trace: tracer.trace });
+    const newContacts = next?.foundContacts ?? (incoming as PendingPlan).foundContacts ?? lastContacts;
+    return NextResponse.json({ displayMessages, apiMessages, pendingPlan: next, lastContacts: newContacts, trace: tracer.trace });
   }
 
   // ── Rejected: cancel ────────────────────────────────────────────────────────
@@ -281,13 +287,39 @@ export async function POST(req: NextRequest) {
       id: uuid(), role: "assistant",
       content: "Cancelled. What would you like to do instead?",
     });
-    return NextResponse.json({ displayMessages, apiMessages, pendingPlan: null, trace: tracer.trace });
+    return NextResponse.json({ displayMessages, apiMessages, pendingPlan: null, lastContacts, trace: tracer.trace });
   }
 
   // ── New message: classify intent ─────────────────────────────────────────────
   displayMessages.push({ id: uuid(), role: "status", content: "Thinking…" });
 
   const plan = await orchestrate(userMessage, messages ?? [], userProfile, tracer);
+
+  console.log("[agent] intent:", plan.intent, "| lastContacts:", lastContacts.length, "| email_gen_params:", !!plan.email_gen_params);
+
+  // If user wants to email/draft and we already have contacts from a prior search — skip re-searching
+  if (
+    (plan.intent === "generate_email" || plan.intent === "find_and_email") &&
+    lastContacts.length > 0
+  ) {
+    const firstStep: PendingPlan["nextStep"] = "email_generator";
+    displayMessages.push({
+      id: uuid(), role: "assistant",
+      content: `I'll draft emails for the ${lastContacts.length} contacts from your last search — shall I proceed?`,
+    });
+    return NextResponse.json({
+      displayMessages,
+      apiMessages,
+      lastContacts,
+      pendingPlan: {
+        plan: { ...plan, intent: "find_and_email" as const },
+        nextStep: firstStep,
+        foundContacts: lastContacts,
+        feedback: userMessage,
+      } satisfies PendingPlan,
+      trace: tracer.trace,
+    });
+  }
 
   // General intent — reply directly, no confirmation needed
   if (plan.intent === "general") {
@@ -324,6 +356,7 @@ export async function POST(req: NextRequest) {
   return NextResponse.json({
     displayMessages,
     apiMessages,
+    lastContacts,
     pendingPlan: { plan, nextStep: firstStep } satisfies PendingPlan,
     trace: tracer.trace,
   });

@@ -182,6 +182,7 @@ function ChatView({ userProfile }: { userProfile: FullProfile }) {
   }]);
   const [apiMessages, setApiMessages] = useState<unknown[]>([]);
   const [pendingPlan, setPendingPlan] = useState<unknown>(null);
+  const [lastContacts, setLastContacts] = useState<RankedContact[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [emailMap, setEmailMap] = useState<Record<string, string>>({}); // name → email
@@ -208,12 +209,13 @@ function ChatView({ userProfile }: { userProfile: FullProfile }) {
       const res = await fetch("/api/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: apiMessages, userMessage: msg, userProfile, pendingPlan }),
+        body: JSON.stringify({ messages: apiMessages, userMessage: msg, userProfile, pendingPlan, lastContacts }),
       });
       const data = await res.json();
       setMessages((prev) => [...prev, ...data.displayMessages]);
       setApiMessages(data.apiMessages);
       setPendingPlan(data.pendingPlan ?? null);
+      if (data.lastContacts?.length) setLastContacts(data.lastContacts);
       if (data.trace) setLastTrace(data.trace);
 
       // Extract any newly found emails and add to emailMap
@@ -276,6 +278,24 @@ function ChatView({ userProfile }: { userProfile: FullProfile }) {
 
       {/* Input */}
       <div className="shrink-0 border-t border-slate-700/50 px-6 py-4">
+        {/* Yes / No confirmation buttons when agent is waiting */}
+        {pendingPlan && (pendingPlan as { nextStep?: string }).nextStep !== "done" && !loading && (
+          <div className="flex gap-2 mb-3">
+            <button
+              onClick={() => handleSend("yes")}
+              className="flex-1 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium py-2.5 transition-colors"
+            >
+              Yes, proceed
+            </button>
+            <button
+              onClick={() => handleSend("no")}
+              className="flex-1 rounded-xl border border-slate-700 text-slate-400 hover:text-slate-200 hover:border-slate-500 text-sm py-2.5 transition-colors"
+            >
+              No, cancel
+            </button>
+          </div>
+        )}
+
         {/* Quick prompts — only on first message */}
         {messages.length === 1 && (
           <div className="flex flex-wrap gap-2 mb-3">
