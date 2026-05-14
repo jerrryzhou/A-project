@@ -78,9 +78,10 @@ export async function runContactFinder(
   const t0 = Date.now();
   const query = buildExaQuery({ ...params, goal });
 
+  const count = params.count ?? 10;
   let exaResults: ExaResult[] = [];
   try {
-    exaResults = await exaSearch(query, 20);
+    exaResults = await exaSearch(query, Math.min(count * 3, 30));
   } catch (e) {
     // Fall back to Claude-only search if Exa fails
     console.warn("[contactFinder] Exa failed, falling back to Claude:", e);
@@ -145,7 +146,7 @@ export async function runContactFinder(
 
   // ── Step 3: Rank ─────────────────────────────────────────────────────────────
   const t2 = Date.now();
-  const rankResult = await executeTool("rank_contacts", { contacts: rawContacts, goal }, userProfile);
+  const rankResult = await executeTool("rank_contacts", { contacts: rawContacts, goal, count }, userProfile);
 
   tracer?.log({
     agent: "contact_finder",

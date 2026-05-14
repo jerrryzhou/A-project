@@ -13,6 +13,7 @@ export const ContactSearchParamsSchema = z.object({
   industries: z.array(z.string()).describe("Target industries"),
   locations: z.array(z.string()).describe("Cities or regions"),
   keywords: z.array(z.string()).default([]).describe("Extra keywords"),
+  count: z.number().int().min(1).max(20).default(10).describe("How many contacts to return — extract from user message if specified, otherwise 10"),
 });
 
 export const EmailGenParamsSchema = z.object({
@@ -32,7 +33,7 @@ export const EmailSendParamsSchema = z.object({
 });
 
 const OrchestratorPlanSchema = z.object({
-  intent: z.enum(["find_contacts", "generate_email", "send_email", "find_and_email", "general"]),
+  intent: z.enum(["find_contacts", "generate_email", "send_email", "find_and_email", "find_email_and_send", "find_draft_and_send", "general"]),
   reasoning: z.string().describe("One sentence explaining the classification"),
   contact_search_params: ContactSearchParamsSchema.optional().describe(
     "Required for find_contacts and find_and_email intents"
@@ -66,10 +67,12 @@ const PLAN_TOOL = zodTool(
 const SYSTEM = `You are an intent classifier for a professional networking assistant.
 
 Intents:
-- find_contacts: user wants to find/search for people to network with
+- find_contacts: user wants to find/search for people to network with, with no mention of emailing
 - generate_email: user wants to draft OR revise outreach emails. Use this for any request to write, rewrite, improve, or change the tone of emails — even if they say "make it less corny", "redo this", "more professional", "shorter", etc.
-- send_email: user explicitly wants to send an already-drafted email
-- find_and_email: user wants to find contacts AND draft emails in one go
+- send_email: user explicitly wants to send an already-drafted email to a specific person
+- find_and_email: user wants to find contacts AND draft emails but NOT send them
+- find_email_and_send: user already has contacts and drafts, and now wants to look up email addresses and send. Use when user says "find their emails and send", "get the emails and send them", "look up emails and send".
+- find_draft_and_send: user wants the FULL pipeline in one go — find contacts, draft emails, AND actually send them. Use when the message includes both finding/searching people AND sending (e.g. "find engineers in Chicago and send them a networking email", "search for VCs and email them", "find 5 contacts and reach out").
 - general: conversational messages, questions, or anything else. Do NOT use this if the user is asking to change or improve emails.
 
 Extract parameters precisely from the message and conversation history.

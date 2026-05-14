@@ -58,7 +58,7 @@ export default function Dashboard() {
       if (!data.user) { router.replace("/"); return; }
       const [{ data: profile }, { data: userRow }] = await Promise.all([
         supabase.from("user_profiles")
-          .select("school, major, graduation_year, bio, fraternity, linkedin_url")
+          .select("school, major, graduation_year, bio, linkedin_url")
           .eq("user_id", data.user.id).single(),
         supabase.from("users").select("name").eq("id", data.user.id).single(),
       ]);
@@ -183,6 +183,7 @@ function ChatView({ userProfile }: { userProfile: FullProfile }) {
   const [apiMessages, setApiMessages] = useState<unknown[]>([]);
   const [pendingPlan, setPendingPlan] = useState<unknown>(null);
   const [lastContacts, setLastContacts] = useState<RankedContact[]>([]);
+  const [lastDrafts, setLastDrafts] = useState<Record<string, OutreachDraft>>({}); // contactName → draft
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [emailMap, setEmailMap] = useState<Record<string, string>>({}); // name → email
@@ -209,7 +210,7 @@ function ChatView({ userProfile }: { userProfile: FullProfile }) {
       const res = await fetch("/api/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: apiMessages, userMessage: msg, userProfile, pendingPlan, lastContacts }),
+        body: JSON.stringify({ messages: apiMessages, userMessage: msg, userProfile, pendingPlan, lastContacts, lastDrafts }),
       });
       const data = await res.json();
       setMessages((prev) => [...prev, ...data.displayMessages]);
@@ -218,16 +219,21 @@ function ChatView({ userProfile }: { userProfile: FullProfile }) {
       if (data.lastContacts?.length) setLastContacts(data.lastContacts);
       if (data.trace) setLastTrace(data.trace);
 
-      // Extract any newly found emails and add to emailMap
+      // Extract emails and drafts from display messages
       const newEmails: Record<string, string> = {};
+      const newDrafts: Record<string, OutreachDraft> = {};
       for (const m of data.displayMessages as AgentDisplayMessage[]) {
         if (m.data?.type === "email" && m.data.email) {
           newEmails[m.data.name] = m.data.email;
         }
+        if (m.data?.type === "draft") {
+          // match draft to contact by name via apiMessages context
+          const draft = m.data.draft;
+          if (draft.contact_name) newDrafts[draft.contact_name] = draft;
+        }
       }
-      if (Object.keys(newEmails).length > 0) {
-        setEmailMap((prev) => ({ ...prev, ...newEmails }));
-      }
+      if (Object.keys(newEmails).length > 0) setEmailMap((prev) => ({ ...prev, ...newEmails }));
+      if (Object.keys(newDrafts).length > 0) setLastDrafts((prev) => ({ ...prev, ...newDrafts }));
     } catch {
       setMessages((prev) => [
         ...prev,
@@ -909,7 +915,6 @@ function ProfileView({ profile, onSave }: {
         major: form.major ?? null,
         graduation_year: form.graduation_year ?? null,
         bio: form.bio ?? null,
-        fraternity: form.fraternity ?? null,
         linkedin_url: form.linkedin_url ?? null,
       }, { onConflict: "user_id" }),
     ]);
@@ -925,7 +930,6 @@ function ProfileView({ profile, onSave }: {
     { label: "School",               key: "school",          type: "text",   placeholder: "University of Michigan" },
     { label: "Major",                key: "major",           type: "text",   placeholder: "Computer Science" },
     { label: "Graduation year",      key: "graduation_year", type: "number", placeholder: "2026" },
-    { label: "Fraternity / Sorority",key: "fraternity",      type: "text",   placeholder: "Alpha Beta Gamma" },
     { label: "LinkedIn URL",         key: "linkedin_url",    type: "url",    placeholder: "https://linkedin.com/in/yourname" },
   ];
 
@@ -960,9 +964,6 @@ function ProfileView({ profile, onSave }: {
           </p>
           {profile.graduation_year && (
             <p className="text-xs text-slate-500 mt-0.5">Class of {profile.graduation_year}</p>
-          )}
-          {profile.fraternity && (
-            <p className="text-xs text-slate-500">{profile.fraternity}</p>
           )}
         </div>
       </div>

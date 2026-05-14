@@ -18,10 +18,9 @@ export async function POST(req: NextRequest) {
   if (profile.name) senderLines.push(`Name: ${profile.name}`);
   if (profile.school) senderLines.push(`School: ${profile.school}${profile.graduation_year ? ` class of ${profile.graduation_year}` : ""}`);
   if (profile.major) senderLines.push(`Major: ${profile.major}`);
-  if (profile.fraternity) senderLines.push(`Fraternity/Sorority: ${profile.fraternity}`);
   if (profile.bio) senderLines.push(`Bio: ${profile.bio}`);
   const senderContext = senderLines.length
-    ? `\nAbout the sender:\n${senderLines.map(l => `- ${l}`).join("\n")}\n\nIf there is a shared connection (same school, same Greek org, same industry), open with it naturally — it increases response rate dramatically.`
+    ? `\nAbout the sender:\n${senderLines.map(l => `- ${l}`).join("\n")}\n\nIf there is a shared connection (same school, same industry), open with it naturally — it increases response rate dramatically.`
     : "";
 
   const response = await anthropic.messages.create({
@@ -30,7 +29,7 @@ export async function POST(req: NextRequest) {
     system: `You are a networking copywriter. Draft concise, personalized outreach for a professional trying to make a connection.
 
 Rules for LinkedIn note (≤300 chars):
-- If there's a shared background (school, fraternity, industry), lead with it
+- If there's a shared background (school, industry), lead with it
 - Reference something specific about their work
 - State the ask in one sentence
 - No clichés ("I came across your profile", "hope this finds you well")

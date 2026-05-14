@@ -8,6 +8,7 @@ import { orchestrate, type OrchestratorPlan, type EmailGenParams } from "@/lib/a
 import { runContactFinder } from "@/lib/agents/contactFinder";
 import { runEmailGenerator } from "@/lib/agents/emailGenerator";
 import { runEmailSender } from "@/lib/agents/emailSender";
+import { executeTool } from "@/lib/agentTools";
 import { evaluate } from "@/lib/agents/evaluator";
 import { Tracer, type AgentTrace } from "@/lib/agents/tracer";
 import { createClient } from "@/lib/supabase/server";
@@ -23,9 +24,10 @@ export type { AgentTrace };
 
 export type PendingPlan = {
   plan: OrchestratorPlan;
-  nextStep: "contact_finder" | "email_generator" | "email_sender" | "done";
+  nextStep: "contact_finder" | "email_generator" | "email_sender" | "find_email_and_send" | "done";
   foundContacts?: RankedContact[];
   feedback?: string;
+  lastDrafts?: Record<string, unknown>;
 };
 
 const MAX_ATTEMPTS = 3;
@@ -43,8 +45,9 @@ function isRejection(msg: string): boolean {
 }
 
 function getFirstStep(intent: OrchestratorPlan["intent"]): PendingPlan["nextStep"] {
-  if (intent === "find_contacts" || intent === "find_and_email") return "contact_finder";
+  if (intent === "find_contacts" || intent === "find_and_email" || intent === "find_draft_and_send") return "contact_finder";
   if (intent === "generate_email") return "email_generator";
+  if (intent === "find_email_and_send") return "find_email_and_send";
   return "email_sender";
 }
 
@@ -52,32 +55,35 @@ function stepDescription(step: PendingPlan["nextStep"], plan: OrchestratorPlan):
   if (step === "contact_finder") {
     const roles = plan.contact_search_params?.roles?.slice(0, 2).join("/") ?? "contacts";
     const locs  = plan.contact_search_params?.locations?.slice(0, 2).join(", ") ?? "your target area";
+    if (plan.intent === "find_draft_and_send") return `find ${roles} in ${locs}, draft emails, and send them`;
     return `search for ${roles} in ${locs}`;
   }
   if (step === "email_generator") {
     if (plan.email_gen_params) return `draft an email for ${plan.email_gen_params.name} at ${plan.email_gen_params.company}`;
     return `draft emails for the top 3 contacts`;
   }
+  if (step === "find_email_and_send") return `look up emails and send the drafted messages`;
   return `send the email to ${plan.email_send_params?.name ?? "the recipient"}`;
 }
 
 const STEP_TOOLS: Record<PendingPlan["nextStep"], string[]> = {
-  contact_finder:  ["search_contacts", "rank_contacts"],
-  email_generator: ["draft_outreach"],
-  email_sender:    ["gmail.send"],
-  done:            [],
+  contact_finder:       ["search_contacts", "rank_contacts"],
+  email_generator:      ["draft_outreach"],
+  email_sender:         ["gmail.send"],
+  find_email_and_send:  ["find_email", "gmail.send"],
+  done:                 [],
 };
 
 function planSummary(intent: OrchestratorPlan["intent"]): string {
   const steps: PendingPlan["nextStep"][] =
-    intent === "find_contacts"  ? ["contact_finder"] :
-    intent === "generate_email" ? ["email_generator"] :
-    intent === "send_email"     ? ["email_sender"] :
-    intent === "find_and_email" ? ["contact_finder", "email_generator"] : [];
+    intent === "find_contacts"       ? ["contact_finder"] :
+    intent === "generate_email"      ? ["email_generator"] :
+    intent === "send_email"          ? ["email_sender"] :
+    intent === "find_and_email"      ? ["contact_finder", "email_generator"] :
+    intent === "find_email_and_send" ? ["find_email_and_send"] :
+    intent === "find_draft_and_send" ? ["contact_finder", "email_generator", "find_email_and_send"] : [];
 
-  return steps
-    .map((s) => `${s} (${STEP_TOOLS[s].join(", ")})`)
-    .join(" → ");
+  return steps.map((s) => `${s} (${STEP_TOOLS[s].join(", ")})`).join(" → ");
 }
 
 function buildContactFromParams(params: EmailGenParams): RankedContact {
@@ -160,7 +166,7 @@ async function executeStep(
 
     for (let i = 0; i < MAX_ATTEMPTS; i++) {
       contactResult = await runContactFinder(plan.contact_search_params, userProfile, feedback, tracer);
-      const ev = await evaluate("contact_finder", contactResult, tracer);
+      const ev = await evaluate("contact_finder", contactResult, tracer, plan.contact_search_params?.goal);
       if (ev.passed) break;
       feedback = ev.feedback;
       if (i < MAX_ATTEMPTS - 1) {
@@ -178,7 +184,7 @@ async function executeStep(
         content: `Found ${contactResult.contacts.length} contacts: ${contactResult.contacts.slice(0, 3).map(c => `${c.name} (${c.title} at ${c.company})`).join(", ")}`,
       });
 
-      if (plan.intent === "find_and_email") {
+      if (plan.intent === "find_and_email" || plan.intent === "find_draft_and_send") {
         displayMessages.push({
           id: uuid(), role: "assistant",
           content: `Found ${contactResult.contacts.length} contacts. Shall I draft emails for all of them?`,
@@ -201,9 +207,11 @@ async function executeStep(
   // ── Email Generator ─────────────────────────────────────────────────────────
   if (nextStep === "email_generator") {
     const goal = plan.contact_search_params?.goal ?? plan.email_gen_params?.goal ?? "";
-    const targets = plan.intent === "find_and_email"
+    const targets = (plan.intent === "find_and_email" || plan.intent === "find_draft_and_send")
       ? foundContacts
       : plan.email_gen_params ? [buildContactFromParams(plan.email_gen_params)] : [];
+
+    const builtDrafts: Record<string, unknown> = {};
 
     for (const contact of targets) {
       displayMessages.push({ id: uuid(), role: "status", content: `Drafting email for ${contact.name}…` });
@@ -213,7 +221,7 @@ async function executeStep(
 
       for (let i = 0; i < MAX_ATTEMPTS; i++) {
         emailResult = await runEmailGenerator(contact, goal, userProfile, feedback, tracer);
-        const ev = await evaluate("email_generator", emailResult, tracer);
+        const ev = await evaluate("email_generator", emailResult, tracer, goal);
         if (ev.passed) break;
         feedback = ev.feedback;
         if (i < MAX_ATTEMPTS - 1) {
@@ -224,6 +232,7 @@ async function executeStep(
       if (emailResult) {
         displayMessages.push({ id: uuid(), role: "status", content: "", data: { type: "draft", draft: emailResult.draft } });
         apiMessages.push({ role: "assistant", content: `Drafted email for ${emailResult.contactName}: "${emailResult.draft.email_subject}"` });
+        builtDrafts[emailResult.contactName] = emailResult.draft;
       }
     }
 
@@ -234,6 +243,81 @@ async function executeStep(
       });
     }
 
+    // After drafting, ask to send if this is a full-pipeline intent
+    if (plan.intent === "find_draft_and_send" && Object.keys(builtDrafts).length > 0) {
+      displayMessages.push({
+        id: uuid(), role: "assistant",
+        content: `Drafted ${Object.keys(builtDrafts).length} email${Object.keys(builtDrafts).length !== 1 ? "s" : ""}. Shall I find their email addresses and send them?`,
+      });
+      return { plan, nextStep: "find_email_and_send", foundContacts, lastDrafts: builtDrafts };
+    }
+
+    return null;
+  }
+
+  // ── Find Email + Send ───────────────────────────────────────────────────────
+  if (nextStep === "find_email_and_send") {
+    const contacts = foundContacts.length > 0 ? foundContacts : [];
+    const drafts = incoming.lastDrafts ?? {};
+
+    if (!contacts.length) {
+      displayMessages.push({ id: uuid(), role: "assistant", content: "No contacts to send to. Find contacts first." });
+      return null;
+    }
+
+    const tokens = await getGmailAccessToken();
+    if ("error" in tokens) {
+      displayMessages.push({ id: uuid(), role: "assistant", content: `Couldn't send: ${tokens.error}` });
+      return null;
+    }
+
+    let sent = 0;
+    let failed = 0;
+
+    for (const contact of contacts) {
+      if (!contact.name?.trim()) {
+        failed++;
+        continue;
+      }
+      displayMessages.push({ id: uuid(), role: "status", content: `Finding email for ${contact.name}…` });
+
+      const nameParts = contact.name.trim().split(/\s+/);
+      const firstName = nameParts[0] ?? contact.name;
+      const lastName  = nameParts.slice(1).join(" ") || firstName;
+
+      const emailResult = await executeTool("find_email", { first_name: firstName, last_name: lastName, company: contact.company }, userProfile);
+      const emailData = emailResult.result as { email?: string | null };
+      const recipientEmail = emailData.email;
+
+      if (!recipientEmail) {
+        displayMessages.push({ id: uuid(), role: "status", content: `No email found for ${contact.name} — skipping.` });
+        failed++;
+        continue;
+      }
+
+      const draft = drafts[contact.name] as { email_subject?: string; email_body?: string } | undefined;
+      if (!draft?.email_subject || !draft?.email_body) {
+        displayMessages.push({ id: uuid(), role: "status", content: `No draft found for ${contact.name} — skipping.` });
+        failed++;
+        continue;
+      }
+
+      displayMessages.push({ id: uuid(), role: "status", content: `Sending to ${contact.name} (${recipientEmail})…` });
+      const result = await runEmailSender({ to: recipientEmail, name: contact.name, subject: draft.email_subject, body: draft.email_body, ...tokens });
+
+      if (result.success) {
+        sent++;
+        displayMessages.push({ id: uuid(), role: "status", content: `Sent to ${contact.name}.` });
+      } else {
+        failed++;
+        displayMessages.push({ id: uuid(), role: "status", content: `Failed to send to ${contact.name}: ${result.error}` });
+      }
+    }
+
+    displayMessages.push({
+      id: uuid(), role: "assistant",
+      content: `Done. Sent ${sent} email${sent !== 1 ? "s" : ""}${failed > 0 ? `, ${failed} failed (no email found or no draft)` : ""}.`,
+    });
     return null;
   }
 
@@ -264,7 +348,7 @@ async function executeStep(
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { messages, userMessage, userProfile: rawProfile, pendingPlan: incoming, lastContacts = [] } = body;
+  const { messages, userMessage, userProfile: rawProfile, pendingPlan: incoming, lastContacts = [], lastDrafts = {} } = body;
 
   const userProfile = UserProfileSchema.parse(rawProfile ?? {});
   const tracer = new Tracer();
@@ -348,6 +432,27 @@ export async function POST(req: NextRequest) {
 
   // Show plan and ask for confirmation of the first step
   const firstStep = getFirstStep(plan.intent);
+
+  if (plan.intent === "find_email_and_send") {
+    const draftCount = Object.keys(lastDrafts as Record<string, unknown>).length;
+    displayMessages.push({
+      id: uuid(), role: "assistant",
+      content: `I'll look up emails for ${lastContacts.length} contact${lastContacts.length !== 1 ? "s" : ""} and send ${draftCount > 0 ? draftCount : "the drafted"} email${draftCount !== 1 ? "s" : ""} — shall I proceed?`,
+    });
+    return NextResponse.json({
+      displayMessages,
+      apiMessages,
+      lastContacts,
+      pendingPlan: {
+        plan,
+        nextStep: "find_email_and_send",
+        foundContacts: lastContacts,
+        lastDrafts: lastDrafts as Record<string, unknown>,
+      } satisfies PendingPlan,
+      trace: tracer.trace,
+    });
+  }
+
   displayMessages.push({
     id: uuid(), role: "assistant",
     content: `${plan.reasoning}\n\nPlan: ${planSummary(plan.intent)}\n\nI'll ${stepDescription(firstStep, plan)} — shall I proceed?`,

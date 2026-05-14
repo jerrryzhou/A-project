@@ -22,7 +22,6 @@ export default function OnboardingPage() {
   const [gradYear, setGradYear] = useState("");
   const [bio, setBio] = useState("");
   const [linkedin, setLinkedin] = useState("");
-  const [fraternity, setFraternity] = useState("");
 
   // Pre-fill name from Supabase user
   useEffect(() => {
@@ -64,7 +63,6 @@ export default function OnboardingPage() {
       graduation_year: gradYear ? parseInt(gradYear) : null,
       linkedin_url: linkedin || null,
       bio: bio || null,
-      fraternity: fraternity || null,
     }, { onConflict: "user_id" });
 
     if (profileError) {
@@ -125,7 +123,6 @@ export default function OnboardingPage() {
           {step === "links" && (
             <StepLinks
               linkedin={linkedin} setLinkedin={setLinkedin}
-              fraternity={fraternity} setFraternity={setFraternity}
             />
           )}
 
@@ -265,21 +262,19 @@ function StepAbout({ bio, setBio }: { bio: string; setBio: (v: string) => void }
 }
 
 function StepLinks({
-  linkedin, setLinkedin, fraternity, setFraternity,
+  linkedin, setLinkedin,
 }: {
   linkedin: string; setLinkedin: (v: string) => void;
-  fraternity: string; setFraternity: (v: string) => void;
 }) {
   return (
     <div className="space-y-6">
       <div>
         <div className="text-2xl mb-1">🔗</div>
         <h2 className="text-xl font-bold text-white">Stay connected</h2>
-        <p className="text-sm text-gray-500 mt-1">Optional — add your LinkedIn and Greek affiliation.</p>
+        <p className="text-sm text-gray-500 mt-1">Optional — add your LinkedIn profile.</p>
       </div>
       <div className="space-y-4">
         <Field label="LinkedIn URL" type="url" value={linkedin} onChange={setLinkedin} placeholder="https://linkedin.com/in/yourname" />
-        <Field label="Fraternity / Sorority" type="text" value={fraternity} onChange={setFraternity} placeholder="Alpha Beta Gamma" />
       </div>
     </div>
   );

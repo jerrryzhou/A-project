@@ -16,17 +16,13 @@ const EXTRACT_TOOL = zodTool(
 );
 
 function buildProfileSection(profile: UserProfile): string {
-  if (!profile.school && !profile.fraternity && !profile.bio) return "";
+  if (!profile.school && !profile.bio) return "";
 
   const parts: string[] = [];
 
   if (profile.school) {
     const year = profile.graduation_year ? ` (class of ${profile.graduation_year})` : "";
     parts.push(`The user attended ${profile.school}${year}. AT LEAST HALF of the contacts you return must be ${profile.school} alumni. This is the single most important filter — a shared alma mater dramatically increases the chance of getting a response.`);
-  }
-
-  if (profile.fraternity) {
-    parts.push(`The user is a member of ${profile.fraternity}. Include any professionals who are also members of this organization — Greek network connections are extremely warm leads.`);
   }
 
   if (profile.major) {
@@ -74,7 +70,7 @@ Search criteria:
 - Locations: ${locations.join(", ")}
 ${keywords.length ? `- Keywords: ${keywords.join(", ")}\n` : ""}${profileSection}
 
-Return 20–30 people. Do NOT include linkedin_url — it will be generated automatically. For anyone who attended the user's school, note it in their headline field (e.g. "Michigan alum, Partner at Sequoia"). Do NOT claim someone was in a specific fraternity unless you have verified public information confirming it.`,
+Return 20–30 people. Do NOT include linkedin_url — it will be generated automatically. For anyone who attended the user's school, note it in their headline field (e.g. "Michigan alum, Partner at Sequoia").`,
         },
       ],
     });

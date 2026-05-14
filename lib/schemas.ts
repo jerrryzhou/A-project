@@ -8,7 +8,6 @@ export const UserProfileSchema = z.object({
   major: z.string().optional(),
   graduation_year: z.number().optional(),
   bio: z.string().optional(),
-  fraternity: z.string().optional(),
   linkedin_url: z.string().optional(),
 });
 

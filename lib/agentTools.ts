@@ -32,12 +32,13 @@ export const AGENT_TOOLS: Anthropic.Tool[] = [
   },
   {
     name: "rank_contacts",
-    description: "Rank a contact list by relevance to the user's goal. Returns top 10 with scores and talking points.",
+    description: "Rank a contact list by relevance to the user's goal. Returns top N contacts with scores and talking points.",
     input_schema: {
       type: "object" as const,
       properties: {
         contacts: { type: "array", items: { type: "object" }, description: "Contacts from search_contacts" },
         goal:     { type: "string" },
+        count:    { type: "number", description: "How many top contacts to return" },
       },
       required: ["contacts", "goal"],
     },
@@ -127,7 +128,6 @@ function buildProfileSection(profile: UserProfile): string {
     const year = profile.graduation_year ? ` (class of ${profile.graduation_year})` : "";
     parts.push(`AT LEAST HALF of contacts must be ${profile.school}${year} alumni.`);
   }
-  if (profile.fraternity) parts.push(`Include ${profile.fraternity} members where verifiable.`);
   if (profile.major)      parts.push(`User studied ${profile.major} — prioritize that field.`);
   if (profile.bio)        parts.push(`User bio: "${profile.bio}"`);
   return parts.length ? `\n\n=== PERSONALIZATION ===\n${parts.join("\n")}` : "";
@@ -183,10 +183,10 @@ async function executeRank(
 ): Promise<ToolExecResult> {
   const contacts = (input.contacts as Array<Record<string, unknown>>) ?? [];
   const goal     = input.goal as string;
+  const count    = (input.count as number | undefined) ?? 10;
 
   const profileCtx = [
     profile.school     && `School: ${profile.school}`,
-    profile.fraternity && `Fraternity: ${profile.fraternity}`,
     profile.major      && `Major: ${profile.major}`,
   ].filter(Boolean).join(", ");
 
@@ -197,7 +197,7 @@ async function executeRank(
   const response = await anthropic.messages.create({
     model: MODEL_FAST,
     max_tokens: 4096,
-    system: `You are a networking strategist. Rank the top 10 most valuable contacts for the user's goal. Boost contacts who share the user's school or fraternity — mention it in talking_points.${profileCtx ? ` User background: ${profileCtx}.` : ""}`,
+    system: `You are a networking strategist. Rank the top ${count} most valuable contacts for the user's goal. Return EXACTLY ${count} contacts, no more. Boost contacts who share the user's school — mention it in talking_points.${profileCtx ? ` User background: ${profileCtx}.` : ""}`,
     tools: [RANK_TOOL],
     tool_choice: { type: "tool", name: RANK_TOOL.name },
     messages: [{ role: "user", content: `Goal: ${goal}\n\nContacts:\n${contactList}` }],
@@ -209,9 +209,10 @@ async function executeRank(
   if (!block) return { result: { contacts: [], total_searched: contacts.length, criteria_summary: goal } };
 
   const results = RankedResultsSchema.parse(block.input);
+  const trimmed = { ...results, contacts: results.contacts.slice(0, count) };
   return {
-    result: results,
-    data: { type: "contacts", contacts: results.contacts },
+    result: trimmed,
+    data: { type: "contacts", contacts: trimmed.contacts },
     usage: response.usage,
   };
 }
@@ -265,7 +266,6 @@ async function executeDraftOutreach(
   const senderCtx = [
     profile.name        && `Name: ${profile.name}`,
     profile.school      && `School: ${profile.school}${profile.graduation_year ? ` class of ${profile.graduation_year}` : ""}`,
-    profile.fraternity  && `Fraternity: ${profile.fraternity}`,
     profile.bio         && `Bio: ${profile.bio}`,
   ].filter(Boolean).join(", ");
 
@@ -280,7 +280,7 @@ Rules:
 - No clichés: never use "hope this finds you well", "I came across your profile", or AI-sounding filler.
 - Clear and concise: every sentence has a purpose; email ≈100 words.
 - End with one specific action (e.g. "Would you have 20 min next week?").
-- If sender and contact share a school or fraternity, open with it naturally.${senderCtx ? `\n\nSender context: ${senderCtx}.` : ""}`,
+- If sender and contact share a school, open with it naturally.${senderCtx ? `\n\nSender context: ${senderCtx}.` : ""}`,
     tools: [DRAFT_TOOL],
     tool_choice: { type: "tool", name: DRAFT_TOOL.name },
     messages: [{

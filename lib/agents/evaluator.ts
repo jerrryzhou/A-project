@@ -4,9 +4,11 @@ import { zodTool, extractToolInput } from "@/lib/zodFormat";
 import type { Tracer } from "./tracer";
 
 const EvalResultSchema = z.object({
-  passed: z.boolean(),
-  score: z.number().min(1).max(10).describe("Quality score 1-10"),
-  feedback: z.string().describe("Specific, actionable feedback if not passed"),
+  passed:               z.boolean(),
+  score:                z.number().min(1).max(10).describe("Output quality score 1-10"),
+  goal_alignment:       z.number().min(1).max(10).describe("How well the output fulfills the original user prompt 1-10"),
+  feedback:             z.string().describe("Specific, actionable feedback if not passed"),
+  goal_alignment_notes: z.string().describe("One sentence on how well the output matched the user's goal"),
 });
 
 export type EvalResult = z.infer<typeof EvalResultSchema>;
@@ -21,27 +23,40 @@ const EVAL_TOOL = zodTool(
 
 const SYSTEM = `You are a strict quality evaluator for a networking assistant.
 
-contact_finder — Pass (score ≥ 7) when:
+For every evaluation, score two things independently:
+1. Output quality (score): how well the sub-agent did its job technically
+2. Goal alignment (goal_alignment): how well the output fulfills what the user originally asked for
+
+contact_finder — Pass (score ≥ 7 AND goal_alignment ≥ 7) when:
 - 5 or more contacts returned
 - Contacts match the stated goal and target industry/role
 - Mix of seniority is appropriate
-Fail with actionable feedback otherwise (e.g. "Too few contacts — need 5+", "Results are too junior, need VP/director level").
+- Contacts are clearly relevant to what the user asked for
+Fail with actionable feedback otherwise.
 
-email_generator — Pass (score ≥ 7) when:
+email_generator — Pass (score ≥ 7 AND goal_alignment ≥ 7) when:
 - Email is ≈100 words, has a clear ask, no filler phrases like "hope this finds you well"
 - Personalized (references role, company, or shared background)
-Fail with specific revision notes (e.g. "Email lacks a clear ask", "Too generic — mention their specific work").
+- The email's ask directly reflects the user's stated goal (e.g. if user said "ask to work for free", the email must ask that)
+Fail with specific revision notes.
 
 email_sender — Pass if success=true. Fail with the error message otherwise.
 
-Be strict. Generic or low-effort output should fail.`;
+Be strict. Generic output or output that drifts from the user's goal should fail.`;
 
 export async function evaluate(
   agentType: AgentType,
   result: unknown,
-  tracer?: Tracer
+  tracer?: Tracer,
+  userGoal?: string
 ): Promise<EvalResult> {
   const t0 = Date.now();
+
+  const content = [
+    userGoal ? `User's original goal: "${userGoal}"` : null,
+    `Evaluate this ${agentType} result:\n\n${JSON.stringify(result, null, 2)}`,
+  ].filter(Boolean).join("\n\n");
+
   const response = await anthropic.messages.create({
     model: MODEL_CHEAP,
     max_tokens: 512,
@@ -49,12 +64,7 @@ export async function evaluate(
     system: SYSTEM,
     tools: [EVAL_TOOL],
     tool_choice: { type: "tool", name: EVAL_TOOL.name },
-    messages: [
-      {
-        role: "user",
-        content: `Evaluate this ${agentType} result:\n\n${JSON.stringify(result, null, 2)}`,
-      },
-    ],
+    messages: [{ role: "user", content }],
   });
 
   const eval_ = extractToolInput(response.content, EvalResultSchema, EVAL_TOOL.name);
@@ -63,9 +73,9 @@ export async function evaluate(
     agent: "evaluator",
     model: MODEL_CHEAP,
     tool: EVAL_TOOL.name,
-    toolInput: { agentType },
-    thought: eval_.feedback,
-    result: { passed: eval_.passed, score: eval_.score },
+    toolInput: { agentType, userGoal },
+    thought: `${eval_.feedback} | Goal alignment: ${eval_.goal_alignment}/10 — ${eval_.goal_alignment_notes}`,
+    result: { passed: eval_.passed, score: eval_.score, goal_alignment: eval_.goal_alignment },
     tokens: {
       input: response.usage.input_tokens,
       output: response.usage.output_tokens,

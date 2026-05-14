@@ -31,10 +31,9 @@ export async function POST(req: NextRequest) {
   const profileLines: string[] = [];
   if (profile.school) profileLines.push(`School: ${profile.school}${profile.graduation_year ? ` (class of ${profile.graduation_year})` : ""}`);
   if (profile.major) profileLines.push(`Major: ${profile.major}`);
-  if (profile.fraternity) profileLines.push(`Fraternity/Sorority: ${profile.fraternity}`);
   if (profile.bio) profileLines.push(`Bio: ${profile.bio}`);
   const profileContext = profileLines.length
-    ? `\nUser background:\n${profileLines.map(l => `- ${l}`).join("\n")}\n\nBoost ranking for contacts who share the user's school, fraternity, or industry background — mention the shared connection explicitly in talking_points.`
+    ? `\nUser background:\n${profileLines.map(l => `- ${l}`).join("\n")}\n\nBoost ranking for contacts who share the user's school or industry background — mention the shared connection explicitly in talking_points.`
     : "";
 
   const response = await anthropic.messages.create({
@@ -44,7 +43,7 @@ export async function POST(req: NextRequest) {
 
 Ranking criteria:
 1. Relevance to the stated goal (most important)
-2. Shared background with the user (same school, fraternity, or field — dramatically increases response rate)
+2. Shared background with the user (same school or field — dramatically increases response rate)
 3. Seniority and decision-making power
 4. Quality of talking points you can generate
 
