@@ -703,7 +703,7 @@ function DraftResult({ draft }: { draft: OutreachDraft }) {
 function ContactsView() {
   const [contacts, setContacts] = useState<SavedContact[]>([]);
   const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState("all");
+  const [filter, setFilter] = useState("saved");
 
   useEffect(() => {
     createClient()
@@ -713,7 +713,7 @@ function ContactsView() {
       .then(({ data }) => { setContacts(data ?? []); setLoading(false); });
   }, []);
 
-  const filtered = filter === "all" ? contacts : contacts.filter((c) => c.status === filter);
+  const filtered = contacts.filter((c) => c.status === filter);
 
   return (
     <div className="max-w-4xl mx-auto px-6 py-8">
@@ -726,7 +726,7 @@ function ContactsView() {
 
       {/* Filter tabs */}
       <div className="flex gap-1 mb-6 bg-slate-800/60 rounded-lg p-1 w-fit">
-        {["all", "saved", "drafted", "sent", "replied", "archived"].map((s) => (
+        {["saved", "sent"].map((s) => (
           <button
             key={s}
             onClick={() => setFilter(s)}
@@ -751,7 +751,7 @@ function ContactsView() {
           <div className="text-4xl mb-3">📋</div>
           <p className="font-medium text-slate-400">No contacts yet</p>
           <p className="text-sm text-slate-500 mt-1">
-            Approve contacts from the Search tab to save them here.
+            {filter === "sent" ? "No emails sent yet." : "No saved contacts yet."}
           </p>
         </div>
       ) : (
@@ -780,11 +780,8 @@ function SavedContactRow({ contact, onStatusChange }: {
   const [copied, setCopied] = useState<string | null>(null);
 
   const statusColors: Record<string, string> = {
-    saved:    "bg-slate-700/60 text-slate-300",
-    drafted:  "bg-indigo-900/50 text-indigo-300 border border-indigo-700/40",
-    sent:     "bg-amber-900/50 text-amber-300 border border-amber-700/40",
-    replied:  "bg-emerald-900/50 text-emerald-300 border border-emerald-700/40",
-    archived: "bg-slate-800 text-slate-500",
+    saved: "bg-slate-700/60 text-slate-300",
+    sent:  "bg-amber-900/50 text-amber-300 border border-amber-700/40",
   };
 
   function copy(text: string, key: string) {
@@ -830,7 +827,7 @@ function SavedContactRow({ contact, onStatusChange }: {
             onChange={(e) => onStatusChange(contact.id, e.target.value)}
             className="text-xs bg-slate-700/80 border border-slate-600/50 rounded-lg px-2 py-1 text-slate-300 focus:outline-none cursor-pointer"
           >
-            {["saved", "drafted", "sent", "replied", "archived"].map((s) => (
+            {["saved", "sent"].map((s) => (
               <option key={s} value={s}>{s}</option>
             ))}
           </select>

@@ -146,6 +146,45 @@ async function getGmailAccessToken(): Promise<
   return { accessToken, gmailEmail: row.gmail_email };
 }
 
+// ── DB helpers ────────────────────────────────────────────────────────────────
+
+type SupabaseClient = Awaited<ReturnType<typeof createClient>>;
+
+async function saveContactsToDb(contacts: RankedContact[], supabase: SupabaseClient, userId: string) {
+  if (!contacts.length) return;
+  const { data: existing } = await supabase
+    .from("contacts")
+    .select("name, company")
+    .eq("user_id", userId);
+
+  const existingKeys = new Set((existing ?? []).map((r: { name: string; company: string }) => `${r.name}|${r.company}`));
+  const toInsert = contacts
+    .filter(c => !existingKeys.has(`${c.name}|${c.company}`))
+    .map(c => ({
+      user_id: userId,
+      name: c.name,
+      title: c.title ?? null,
+      company: c.company ?? null,
+      location: c.location ?? null,
+      linkedin_url: c.linkedin_url ?? null,
+      relevance_score: c.relevance_score ?? null,
+      why_relevant: c.why_relevant ?? null,
+      talking_points: c.talking_points ?? [],
+      status: "saved",
+    }));
+
+  if (toInsert.length) await supabase.from("contacts").insert(toInsert);
+}
+
+async function markContactsSent(names: string[], supabase: SupabaseClient, userId: string) {
+  if (!names.length) return;
+  await supabase
+    .from("contacts")
+    .update({ status: "sent" })
+    .eq("user_id", userId)
+    .in("name", names);
+}
+
 // ── Step executor ─────────────────────────────────────────────────────────────
 
 async function executeStep(
@@ -153,7 +192,9 @@ async function executeStep(
   userProfile: UserProfile,
   displayMessages: AgentDisplayMessage[],
   apiMessages: Anthropic.MessageParam[],
-  tracer: Tracer
+  tracer: Tracer,
+  supabase?: SupabaseClient,
+  userId?: string
 ): Promise<PendingPlan | null> {
   const { plan, nextStep, foundContacts = [], feedback: planFeedback } = incoming;
 
@@ -175,6 +216,10 @@ async function executeStep(
     }
 
     if (contactResult?.contacts.length) {
+      if (supabase && userId) {
+        await saveContactsToDb(contactResult.contacts, supabase, userId);
+      }
+
       displayMessages.push({
         id: uuid(), role: "status", content: "",
         data: { type: "contacts", contacts: contactResult.contacts },
@@ -273,6 +318,7 @@ async function executeStep(
 
     let sent = 0;
     let failed = 0;
+    const sentNames: string[] = [];
 
     for (const contact of contacts) {
       if (!contact.name?.trim()) {
@@ -307,11 +353,16 @@ async function executeStep(
 
       if (result.success) {
         sent++;
+        sentNames.push(contact.name);
         displayMessages.push({ id: uuid(), role: "status", content: `Sent to ${contact.name}.` });
       } else {
         failed++;
         displayMessages.push({ id: uuid(), role: "status", content: `Failed to send to ${contact.name}: ${result.error}` });
       }
+    }
+
+    if (supabase && userId && sentNames.length) {
+      await markContactsSent(sentNames, supabase, userId);
     }
 
     displayMessages.push({
@@ -332,6 +383,9 @@ async function executeStep(
     }
 
     const result = await runEmailSender({ ...plan.email_send_params, ...tokens });
+    if (result.success && supabase && userId) {
+      await markContactsSent([plan.email_send_params.name], supabase, userId);
+    }
     displayMessages.push({
       id: uuid(), role: "assistant",
       content: result.success
@@ -358,9 +412,13 @@ export async function POST(req: NextRequest) {
     { role: "user", content: userMessage },
   ];
 
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  const userId = user?.id;
+
   // ── Confirmed: execute the pending step ─────────────────────────────────────
   if (incoming && isConfirmation(userMessage)) {
-    const next = await executeStep(incoming as PendingPlan, userProfile, displayMessages, apiMessages, tracer);
+    const next = await executeStep(incoming as PendingPlan, userProfile, displayMessages, apiMessages, tracer, supabase, userId);
     const newContacts = next?.foundContacts ?? (incoming as PendingPlan).foundContacts ?? lastContacts;
     return NextResponse.json({ displayMessages, apiMessages, pendingPlan: next, lastContacts: newContacts, trace: tracer.trace });
   }
