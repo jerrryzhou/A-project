@@ -36,7 +36,8 @@ Rules for LinkedIn note (≤300 chars):
 
 Rules for email:
 - Subject: specific and benefit-forward, not clever
-- Body: ~100 words, plain English, clear ask, no fluff
+- Body: ~80 words, plain English, clear ask, no fluff
+- No em dashes (—). Use a period or comma instead.
 - If there's a shared connection, mention it in the first sentence
 - End with a specific proposed action (15-min call, coffee, etc.)`,
     tools: [TOOL],

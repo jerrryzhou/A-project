@@ -33,7 +33,7 @@ export const EmailSendParamsSchema = z.object({
 });
 
 const OrchestratorPlanSchema = z.object({
-  intent: z.enum(["find_contacts", "generate_email", "send_email", "find_and_email", "find_email_and_send", "find_draft_and_send", "general"]),
+  intent: z.enum(["find_contacts", "generate_email", "send_email", "find_and_email", "find_email_and_send", "find_draft_and_send", "general", "clarify"]),
   reasoning: z.string().describe("One sentence explaining the classification"),
   contact_search_params: ContactSearchParamsSchema.optional().describe(
     "Required for find_contacts and find_and_email intents"
@@ -48,6 +48,9 @@ const OrchestratorPlanSchema = z.object({
   ).describe("Required for send_email intent — only set if all fields are clearly present"),
   general_reply: z.string().optional().describe(
     "Short reply for general intent — no sub-agent needed"
+  ),
+  clarifying_question: z.string().optional().describe(
+    "Required for clarify intent — a single, specific follow-up question to ask the user"
   ),
 });
 
@@ -73,6 +76,11 @@ Intents:
 - find_and_email: user wants to find contacts AND draft emails but NOT send them
 - find_email_and_send: user already has contacts and drafts, and now wants to look up email addresses and send. Use when user says "find their emails and send", "get the emails and send them", "look up emails and send".
 - find_draft_and_send: user wants the FULL pipeline in one go — find contacts, draft emails, AND actually send them. Use when the message includes both finding/searching people AND sending (e.g. "find engineers in Chicago and send them a networking email", "search for VCs and email them", "find 5 contacts and reach out").
+- clarify: use when the user's request is missing information that would meaningfully change the search. Ask ONE specific question. Use this when:
+  * No role or type of person is mentioned (e.g. "find me some contacts", "find 5 people")
+  * No industry or goal is clear enough to search effectively
+  * The request is ambiguous between very different types of people
+  Do NOT clarify just because location is missing — location is optional. Do NOT clarify if you can make a reasonable inference from context or the user's profile.
 - general: conversational messages, questions, or anything else. Do NOT use this if the user is asking to change or improve emails.
 
 Extract parameters precisely from the message and conversation history.

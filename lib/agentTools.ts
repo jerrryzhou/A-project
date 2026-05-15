@@ -278,7 +278,8 @@ Rules:
 - Professional but natural: polished without being stiff.
 - Genuinely personal: reference their role, company, or shared background — nothing generic.
 - No clichés: never use "hope this finds you well", "I came across your profile", or AI-sounding filler.
-- Clear and concise: every sentence has a purpose; email ≈100 words.
+- No em dashes (—). Use a period or comma instead.
+- Brief and direct: cut every word that isn't earning its place; email ≈80 words.
 - End with one specific action (e.g. "Would you have 20 min next week?").
 - If sender and contact share a school, open with it naturally.${senderCtx ? `\n\nSender context: ${senderCtx}.` : ""}`,
     tools: [DRAFT_TOOL],

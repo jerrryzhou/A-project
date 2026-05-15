@@ -168,8 +168,10 @@ export async function runContactFinder(
     criteria_summary: string;
   };
 
+  const validContacts = (ranked.contacts ?? []).filter(c => c.name?.trim());
+
   return {
-    contacts: ranked.contacts ?? [],
+    contacts: validContacts,
     summary:  ranked.criteria_summary ?? goal,
     totalSearched: ranked.total_searched ?? rawContacts.length,
   };

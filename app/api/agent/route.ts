@@ -405,6 +405,14 @@ export async function POST(req: NextRequest) {
     });
   }
 
+  // Clarify intent — ask a follow-up question, preserve state for next turn
+  if (plan.intent === "clarify") {
+    const question = plan.clarifying_question ?? "Could you give me more details about who you're looking to connect with?";
+    displayMessages.push({ id: uuid(), role: "assistant", content: question });
+    apiMessages.push({ role: "assistant", content: question });
+    return NextResponse.json({ displayMessages, apiMessages, pendingPlan: null, lastContacts, trace: tracer.trace });
+  }
+
   // General intent — reply directly, no confirmation needed
   if (plan.intent === "general") {
     const reply = plan.general_reply ?? "";
