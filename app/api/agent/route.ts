@@ -449,23 +449,25 @@ export async function POST(req: NextRequest) {
 
   console.log("[agent] intent:", plan.intent, "| lastContacts:", lastContacts.length, "| email_gen_params:", !!plan.email_gen_params);
 
-  // If user wants to email/draft and we already have contacts from a prior search — skip re-searching
+  // If user wants to email/draft/send and we already have contacts — skip re-searching
   if (
-    (plan.intent === "generate_email" || plan.intent === "find_and_email") &&
+    (plan.intent === "generate_email" || plan.intent === "find_and_email" || plan.intent === "find_draft_and_send") &&
     lastContacts.length > 0
   ) {
-    const firstStep: PendingPlan["nextStep"] = "email_generator";
+    const wantsSend = plan.intent === "find_draft_and_send";
     displayMessages.push({
       id: uuid(), role: "assistant",
-      content: `I'll draft emails for the ${lastContacts.length} contacts from your last search — shall I proceed?`,
+      content: wantsSend
+        ? `I'll draft emails for the ${lastContacts.length} contacts from your last search and then send them — shall I proceed?`
+        : `I'll draft emails for the ${lastContacts.length} contacts from your last search — shall I proceed?`,
     });
     return NextResponse.json({
       displayMessages,
       apiMessages,
       lastContacts,
       pendingPlan: {
-        plan: { ...plan, intent: "find_and_email" as const },
-        nextStep: firstStep,
+        plan: { ...plan, intent: wantsSend ? "find_draft_and_send" as const : "find_and_email" as const },
+        nextStep: "email_generator",
         foundContacts: lastContacts,
         feedback: userMessage,
       } satisfies PendingPlan,
