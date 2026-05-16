@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { RankedContact, OutreachDraft, UserProfile } from "@/lib/schemas";
 import { createClient } from "@/lib/supabase/client";
-import type { AgentDisplayMessage, AgentTrace } from "@/app/api/agent/route";
+import type { AgentDisplayMessage, AgentTrace, PendingPlan } from "@/app/api/agent/route";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -181,7 +181,7 @@ function ChatView({ userProfile }: { userProfile: FullProfile }) {
       : "Who do you want to connect with? Describe your ideal contact.",
   }]);
   const [apiMessages, setApiMessages] = useState<unknown[]>([]);
-  const [pendingPlan, setPendingPlan] = useState<unknown>(null);
+  const [pendingPlan, setPendingPlan] = useState<PendingPlan | null>(null);
   const [lastContacts, setLastContacts] = useState<RankedContact[]>([]);
   const [lastDrafts, setLastDrafts] = useState<Record<string, OutreachDraft>>({}); // contactName → draft
   const [input, setInput] = useState("");
@@ -285,7 +285,7 @@ function ChatView({ userProfile }: { userProfile: FullProfile }) {
       {/* Input */}
       <div className="shrink-0 border-t border-slate-700/50 px-6 py-4">
         {/* Yes / No confirmation buttons when agent is waiting */}
-        {pendingPlan && (pendingPlan as { nextStep?: string }).nextStep !== "done" && !loading && (
+        {pendingPlan && pendingPlan.nextStep !== "done" && !loading && (
           <div className="flex gap-2 mb-3">
             <button
               onClick={() => handleSend("yes")}
@@ -384,7 +384,7 @@ function DebugPanel({ trace }: { trace: AgentTrace }) {
                     <p className="text-amber-400">{step.tool}</p>
                   </div>
                 )}
-                {step.toolInput && (
+                {step.toolInput != null && (
                   <div>
                     <p className="text-slate-600 mb-0.5">input</p>
                     <pre className="text-slate-400 whitespace-pre-wrap break-all">
@@ -392,7 +392,7 @@ function DebugPanel({ trace }: { trace: AgentTrace }) {
                     </pre>
                   </div>
                 )}
-                {step.result && (
+                {step.result != null && (
                   <div>
                     <p className="text-slate-600 mb-0.5">result</p>
                     <pre className="text-slate-400 whitespace-pre-wrap break-all">
