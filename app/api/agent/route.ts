@@ -12,6 +12,7 @@ import { executeTool } from "@/lib/agentTools";
 import { evaluate } from "@/lib/agents/evaluator";
 import { Tracer, type AgentTrace } from "@/lib/agents/tracer";
 import { createClient } from "@/lib/supabase/server";
+import { checkRateLimit } from "@/lib/rateLimit";
 
 export type AgentDisplayMessage = {
   id: string;
@@ -414,7 +415,16 @@ export async function POST(req: NextRequest) {
 
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
-  const userId = user?.id;
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const userId = user.id;
+
+  const { allowed, used, limit } = await checkRateLimit(supabase, userId);
+  if (!allowed) {
+    return NextResponse.json(
+      { error: `Daily limit reached (${limit} requests/day). Try again tomorrow.` },
+      { status: 429, headers: { "X-RateLimit-Limit": String(limit), "X-RateLimit-Used": String(used) } }
+    );
+  }
 
   // ── Confirmed: execute the pending step ─────────────────────────────────────
   if (incoming && isConfirmation(userMessage)) {
