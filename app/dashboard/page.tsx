@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import type { RankedContact, OutreachDraft, UserProfile } from "@/lib/schemas";
 import { createClient } from "@/lib/supabase/client";
@@ -31,6 +31,14 @@ type FullProfile = UserProfile & { name?: string };
 // ── Dashboard ─────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
+  return (
+    <Suspense>
+      <DashboardInner />
+    </Suspense>
+  );
+}
+
+function DashboardInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [view, setView] = useState<View>("chat");
